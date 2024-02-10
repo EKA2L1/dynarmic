@@ -2190,6 +2190,21 @@ U16U32U64 IREmitter::FPMulAdd(const U16U32U64& a, const U16U32U64& b, const U16U
     }
 }
 
+U16U32U64 IREmitter::FPMulSub(const U16U32U64& a, const U16U32U64& b, const U16U32U64& c) {
+    ASSERT(a.GetType() == b.GetType());
+
+    switch (a.GetType()) {
+    case Type::U16:
+        return Inst<U16>(Opcode::FPMulSub16, a, b, c);
+    case Type::U32:
+        return Inst<U32>(Opcode::FPMulSub32, a, b, c);
+    case Type::U64:
+        return Inst<U64>(Opcode::FPMulSub64, a, b, c);
+    default:
+        UNREACHABLE();
+    }
+}
+
 U32U64 IREmitter::FPMulX(const U32U64& a, const U32U64& b) {
     ASSERT(a.GetType() == b.GetType());
 
@@ -2853,15 +2868,15 @@ void IREmitter::Breakpoint() {
 }
 
 void IREmitter::CallHostFunction(void (*fn)(void)) {
-    Inst(Opcode::CallHostFunction, Imm64(mcl::bit_cast<u64>(fn)));
+    Inst(Opcode::CallHostFunction, Imm64(mcl::bit_cast<u64>(fn)), Value{}, Value{}, Value{});
 }
 
 void IREmitter::CallHostFunction(void (*fn)(u64), const U64& arg1) {
-    Inst(Opcode::CallHostFunction, Imm64(mcl::bit_cast<u64>(fn)), arg1);
+    Inst(Opcode::CallHostFunction, Imm64(mcl::bit_cast<u64>(fn)), arg1, Value{}, Value{});
 }
 
 void IREmitter::CallHostFunction(void (*fn)(u64, u64), const U64& arg1, const U64& arg2) {
-    Inst(Opcode::CallHostFunction, Imm64(mcl::bit_cast<u64>(fn)), arg1, arg2);
+    Inst(Opcode::CallHostFunction, Imm64(mcl::bit_cast<u64>(fn)), arg1, arg2, Value{});
 }
 
 void IREmitter::CallHostFunction(void (*fn)(u64, u64, u64), const U64& arg1, const U64& arg2, const U64& arg3) {

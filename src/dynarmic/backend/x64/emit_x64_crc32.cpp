@@ -22,7 +22,13 @@ static void EmitCRC32Castagnoli(BlockOfCode& code, EmitContext& ctx, IR::Inst* i
     if (code.HasHostFeature(HostFeature::SSE42)) {
         const Xbyak::Reg32 crc = ctx.reg_alloc.UseScratchGpr(args[0]).cvt32();
         const Xbyak::Reg value = ctx.reg_alloc.UseGpr(args[1]).changeBit(data_size);
-        code.crc32(crc, value);
+
+        if (data_size != 64) {
+            code.crc32(crc, value);
+        } else {
+            code.crc32(crc.cvt64(), value);
+        }
+
         ctx.reg_alloc.DefineValue(inst, crc);
         return;
     }
@@ -42,7 +48,7 @@ static void EmitCRC32ISO(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, co
         const Xbyak::Xmm xmm_const = ctx.reg_alloc.ScratchXmm();
         const Xbyak::Xmm xmm_tmp = ctx.reg_alloc.ScratchXmm();
 
-        code.movdqa(xmm_const, code.MConst(xword, 0xb4e5b025'f7011641, 0x00000001'DB710641));
+        code.movdqa(xmm_const, code.Const(xword, 0xb4e5b025'f7011641, 0x00000001'DB710641));
 
         code.movzx(value.cvt32(), value.changeBit(data_size));
         code.xor_(value.cvt32(), crc);
@@ -72,7 +78,7 @@ static void EmitCRC32ISO(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, co
         const Xbyak::Xmm xmm_value = ctx.reg_alloc.ScratchXmm();
         const Xbyak::Xmm xmm_const = ctx.reg_alloc.ScratchXmm();
 
-        code.movdqa(xmm_const, code.MConst(xword, 0xb4e5b025'f7011641, 0x00000001'DB710641));
+        code.movdqa(xmm_const, code.Const(xword, 0xb4e5b025'f7011641, 0x00000001'DB710641));
 
         code.xor_(crc, value);
         code.shl(crc.cvt64(), 32);
@@ -93,7 +99,7 @@ static void EmitCRC32ISO(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, co
         const Xbyak::Xmm xmm_value = ctx.reg_alloc.ScratchXmm();
         const Xbyak::Xmm xmm_const = ctx.reg_alloc.ScratchXmm();
 
-        code.movdqa(xmm_const, code.MConst(xword, 0xb4e5b025'f7011641, 0x00000001'DB710641));
+        code.movdqa(xmm_const, code.Const(xword, 0xb4e5b025'f7011641, 0x00000001'DB710641));
 
         code.mov(crc, crc);
         code.xor_(crc.cvt64(), value);

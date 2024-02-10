@@ -1,6 +1,8 @@
 include(TargetArchitectureSpecificSources)
 
 add_library(dynarmic
+    backend/block_range_information.cpp
+    backend/block_range_information.h
     backend/exception_handler.h
     common/always_false.h
     common/cast_util.h
@@ -86,6 +88,7 @@ add_library(dynarmic
     ir/opt/dead_code_elimination_pass.cpp
     ir/opt/identity_removal_pass.cpp
     ir/opt/ir_matcher.h
+    ir/opt/naming_pass.cpp
     ir/opt/passes.h
     ir/opt/polyfill_pass.cpp
     ir/opt/verification_pass.cpp
@@ -270,8 +273,6 @@ if ("x86_64" IN_LIST ARCHITECTURE)
         backend/x64/abi.h
         backend/x64/block_of_code.cpp
         backend/x64/block_of_code.h
-        backend/x64/block_range_information.cpp
-        backend/x64/block_range_information.h
         backend/x64/callback.cpp
         backend/x64/callback.h
         backend/x64/constant_pool.cpp
@@ -373,6 +374,8 @@ if ("arm64" IN_LIST ARCHITECTURE)
         backend/arm64/reg_alloc.cpp
         backend/arm64/reg_alloc.h
         backend/arm64/stack_layout.h
+        backend/arm64/verbose_debugging_output.cpp
+        backend/arm64/verbose_debugging_output.h
         common/spin_lock_arm64.cpp
         common/spin_lock_arm64.h
     )
@@ -453,7 +456,7 @@ target_include_directories(dynarmic PUBLIC
 )
 set_target_properties(dynarmic PROPERTIES
     VERSION ${dynarmic_VERSION}
-    SOVERSION ${dynarmic_VERSION_MAJOR}
+    SOVERSION ${dynarmic_VERSION_MAJOR}.${dynarmic_VERSION_MINOR}
 )
 target_compile_options(dynarmic PRIVATE ${DYNARMIC_CXX_FLAGS})
 target_link_libraries(dynarmic
@@ -466,10 +469,7 @@ target_link_libraries(dynarmic
 if (DYNARMIC_USE_LLVM)
     target_include_directories(dynarmic PRIVATE ${LLVM_INCLUDE_DIRS})
     target_compile_definitions(dynarmic PRIVATE DYNARMIC_USE_LLVM=1 ${LLVM_DEFINITIONS})
-    if (BUILD_SHARED_LIBS)
-        set(USE_SHARED "USE_SHARED")
-    endif()
-    llvm_config(dynarmic ${USE_SHARED} armdesc armdisassembler aarch64desc aarch64disassembler x86desc x86disassembler)
+    llvm_config(dynarmic USE_SHARED armdesc armdisassembler aarch64desc aarch64disassembler x86desc x86disassembler)
 endif()
 if (DYNARMIC_ENABLE_CPU_FEATURE_DETECTION)
     target_compile_definitions(dynarmic PRIVATE DYNARMIC_ENABLE_CPU_FEATURE_DETECTION=1)

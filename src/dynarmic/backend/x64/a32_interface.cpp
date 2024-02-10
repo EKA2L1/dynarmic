@@ -23,7 +23,6 @@
 #include "dynarmic/common/x64_disassemble.h"
 #include "dynarmic/frontend/A32/translate/a32_translate.h"
 #include "dynarmic/interface/A32/a32.h"
-#include "dynarmic/interface/A32/context.h"
 #include "dynarmic/ir/basic_block.h"
 #include "dynarmic/ir/location_descriptor.h"
 #include "dynarmic/ir/opt/passes.h"
@@ -78,7 +77,6 @@ struct Jit::Impl {
     const A32::UserConfig conf;
 
     // Requests made during execution to invalidate the cache are queued up here.
-    size_t invalid_cache_generation = 0;
     boost::icl::interval_set<u32> invalid_cache_ranges;
     bool invalidate_entire_cache = false;
 
@@ -121,7 +119,6 @@ struct Jit::Impl {
 
             invalid_cache_ranges.clear();
             invalidate_entire_cache = false;
-            invalid_cache_generation++;
             return;
         }
 
@@ -132,7 +129,6 @@ struct Jit::Impl {
         jit_state.ResetRSB();
         emitter.InvalidateCacheRanges(invalid_cache_ranges);
         invalid_cache_ranges.clear();
-        invalid_cache_generation++;
     }
 
     void RequestCacheInvalidation() {
@@ -174,9 +170,11 @@ private:
             invalidate_entire_cache = true;
             PerformCacheInvalidation();
         }
+        block_of_code.EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
 
         IR::Block ir_block = A32::Translate(A32::LocationDescriptor{descriptor}, conf.callbacks, {conf.arch_version, conf.define_unpredictable_behaviour, conf.hook_hint_instructions});
         Optimization::PolyfillPass(ir_block, polyfill_options);
+        Optimization::NamingPass(ir_block);
         if (conf.HasOptimization(OptimizationFlag::GetSetElimination) && !conf.check_halt_on_memory_access) {
             Optimization::A32GetSetElimination(ir_block, {.convert_nz_to_nzc = true});
             Optimization::DeadCodeElimination(ir_block);
@@ -186,6 +184,7 @@ private:
             Optimization::ConstantPropagation(ir_block);
             Optimization::DeadCodeElimination(ir_block);
         }
+        Optimization::IdentityRemovalPass(ir_block);
         Optimization::VerificationPass(ir_block);
         return emitter.Emit(ir_block);
     }
@@ -199,7 +198,9 @@ Jit::~Jit() = default;
 HaltReason Jit::Run() {
     ASSERT(!is_executing);
     is_executing = true;
-    SCOPE_EXIT { this->is_executing = false; };
+    SCOPE_EXIT {
+        this->is_executing = false;
+    };
 
     const HaltReason hr = impl->Execute();
 
@@ -211,7 +212,9 @@ HaltReason Jit::Run() {
 HaltReason Jit::Step() {
     ASSERT(!is_executing);
     is_executing = true;
-    SCOPE_EXIT { this->is_executing = false; };
+    SCOPE_EXIT {
+        this->is_executing = false;
+    };
 
     const HaltReason hr = impl->Step();
 
@@ -276,72 +279,6 @@ u32 Jit::Fpscr() const {
 
 void Jit::SetFpscr(u32 value) {
     return impl->jit_state.SetFpscr(value);
-}
-
-Context Jit::SaveContext() const {
-    Context ctx;
-    SaveContext(ctx);
-    return ctx;
-}
-
-struct Context::Impl {
-    A32JitState jit_state;
-    size_t invalid_cache_generation;
-};
-
-Context::Context()
-        : impl(std::make_unique<Context::Impl>()) {
-    impl->jit_state.ResetRSB();
-}
-Context::~Context() = default;
-Context::Context(const Context& ctx)
-        : impl(std::make_unique<Context::Impl>(*ctx.impl)) {}
-Context::Context(Context&& ctx) noexcept
-        : impl(std::move(ctx.impl)) {}
-Context& Context::operator=(const Context& ctx) {
-    *impl = *ctx.impl;
-    return *this;
-}
-Context& Context::operator=(Context&& ctx) noexcept {
-    impl = std::move(ctx.impl);
-    return *this;
-}
-
-std::array<std::uint32_t, 16>& Context::Regs() {
-    return impl->jit_state.Reg;
-}
-const std::array<std::uint32_t, 16>& Context::Regs() const {
-    return impl->jit_state.Reg;
-}
-std::array<std::uint32_t, 64>& Context::ExtRegs() {
-    return impl->jit_state.ExtReg;
-}
-const std::array<std::uint32_t, 64>& Context::ExtRegs() const {
-    return impl->jit_state.ExtReg;
-}
-
-std::uint32_t Context::Cpsr() const {
-    return impl->jit_state.Cpsr();
-}
-void Context::SetCpsr(std::uint32_t value) {
-    impl->jit_state.SetCpsr(value);
-}
-
-std::uint32_t Context::Fpscr() const {
-    return impl->jit_state.Fpscr();
-}
-void Context::SetFpscr(std::uint32_t value) {
-    return impl->jit_state.SetFpscr(value);
-}
-
-void Jit::SaveContext(Context& ctx) const {
-    ctx.impl->jit_state.TransferJitState(impl->jit_state, false);
-    ctx.impl->invalid_cache_generation = impl->invalid_cache_generation;
-}
-
-void Jit::LoadContext(const Context& ctx) {
-    bool reset_rsb = ctx.impl->invalid_cache_generation != impl->invalid_cache_generation;
-    impl->jit_state.TransferJitState(ctx.impl->jit_state, reset_rsb);
 }
 
 void Jit::DumpDisassembly() const {

@@ -145,20 +145,12 @@ void HandleNaNs(BlockOfCode& code, EmitContext& ctx, bool fpcr_controlled, std::
 
 template<size_t fsize>
 Xbyak::Address GetVectorOf(BlockOfCode& code, u64 value) {
-    if constexpr (fsize == 32) {
-        return code.MConst(xword, (value << 32) | value, (value << 32) | value);
-    } else {
-        return code.MConst(xword, value, value);
-    }
+    return code.BConst<fsize>(xword, value);
 }
 
 template<size_t fsize, u64 value>
 Xbyak::Address GetVectorOf(BlockOfCode& code) {
-    if constexpr (fsize == 32) {
-        return code.MConst(xword, (value << 32) | value, (value << 32) | value);
-    } else {
-        return code.MConst(xword, value, value);
-    }
+    return code.BConst<fsize>(xword, value);
 }
 
 template<size_t fsize>
@@ -171,6 +163,13 @@ template<size_t fsize>
 Xbyak::Address GetNegativeZeroVector(BlockOfCode& code) {
     using FPT = mcl::unsigned_integer_of_size<fsize>;
     return GetVectorOf<fsize, FP::FPInfo<FPT>::Zero(true)>(code);
+}
+
+template<size_t fsize>
+Xbyak::Address GetNonSignMaskVector(BlockOfCode& code) {
+    using FPT = mcl::unsigned_integer_of_size<fsize>;
+    constexpr FPT non_sign_mask = FP::FPInfo<FPT>::exponent_mask | FP::FPInfo<FPT>::mantissa_mask;
+    return GetVectorOf<fsize, non_sign_mask>(code);
 }
 
 template<size_t fsize>
@@ -214,7 +213,7 @@ void ZeroIfNaN(BlockOfCode& code, Xbyak::Xmm result) {
     if (code.HasHostFeature(HostFeature::AVX512_OrthoFloat)) {
         constexpr u32 nan_to_zero = FixupLUT(FpFixup::PosZero,
                                              FpFixup::PosZero);
-        FCODE(vfixupimmp)(result, result, code.MConst(ptr_b, u64(nan_to_zero)), u8(0));
+        FCODE(vfixupimmp)(result, result, code.BConst<32>(ptr_b, nan_to_zero), u8(0));
     } else if (code.HasHostFeature(HostFeature::AVX)) {
         FCODE(vcmpordp)(nan_mask, result, result);
         FCODE(vandp)(result, result, nan_mask);
@@ -238,9 +237,8 @@ void DenormalsAreZero(BlockOfCode& code, FP::FPCR fpcr, std::initializer_list<Xb
                 FpFixup::Norm_Src,
                 FpFixup::Norm_Src,
                 FpFixup::Norm_Src);
-            constexpr u64 denormal_to_zero64 = mcl::bit::replicate_element<fsize, u64>(denormal_to_zero);
 
-            FCODE(vmovap)(tmp, code.MConst(xword, u64(denormal_to_zero64), u64(denormal_to_zero64)));
+            FCODE(vmovap)(tmp, code.BConst<fsize>(xword, denormal_to_zero));
 
             for (const Xbyak::Xmm& xmm : to_daz) {
                 FCODE(vfixupimmp)(xmm, xmm, tmp, u8(0));
@@ -368,7 +366,7 @@ void EmitTwoOpVectorOperation(BlockOfCode& code, EmitContext& ctx, IR::Inst* ins
     ctx.reg_alloc.DefineValue(inst, result);
 }
 
-enum CheckInputNaN {
+enum class CheckInputNaN {
     Yes,
     No,
 };
@@ -527,7 +525,12 @@ void EmitThreeOpFallback(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, La
     ctx.reg_alloc.DefineValue(inst, result);
 }
 
-template<typename Lambda>
+enum class LoadPreviousResult {
+    Yes,
+    No,
+};
+
+template<LoadPreviousResult load_previous_result = LoadPreviousResult::No, typename Lambda>
 void EmitFourOpFallbackWithoutRegAlloc(BlockOfCode& code, EmitContext& ctx, Xbyak::Xmm result, Xbyak::Xmm arg1, Xbyak::Xmm arg2, Xbyak::Xmm arg3, Lambda lambda, bool fpcr_controlled) {
     const auto fn = static_cast<mcl::equivalent_function_type<Lambda>*>(lambda);
 
@@ -552,6 +555,9 @@ void EmitFourOpFallbackWithoutRegAlloc(BlockOfCode& code, EmitContext& ctx, Xbya
     code.lea(code.ABI_PARAM6, code.ptr[code.r15 + code.GetJitStateInfo().offsetof_fpsr_exc]);
 #endif
 
+    if constexpr (load_previous_result == LoadPreviousResult::Yes) {
+        code.movaps(xword[code.ABI_PARAM1], result);
+    }
     code.movaps(xword[code.ABI_PARAM2], arg1);
     code.movaps(xword[code.ABI_PARAM3], arg2);
     code.movaps(xword[code.ABI_PARAM4], arg3);
@@ -586,17 +592,9 @@ void EmitFourOpFallback(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, Lam
 
 template<size_t fsize>
 void FPVectorAbs(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst) {
-    using FPT = mcl::unsigned_integer_of_size<fsize>;
-    constexpr FPT non_sign_mask = FP::FPInfo<FPT>::sign_mask - FPT(1u);
-    constexpr u64 non_sign_mask64 = mcl::bit::replicate_element<fsize, u64>(non_sign_mask);
-
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-
     const Xbyak::Xmm a = ctx.reg_alloc.UseScratchXmm(args[0]);
-    const Xbyak::Address mask = code.MConst(xword, non_sign_mask64, non_sign_mask64);
-
-    code.andps(a, mask);
-
+    code.andps(a, GetNonSignMaskVector<fsize>(code));
     ctx.reg_alloc.DefineValue(inst, a);
 }
 
@@ -787,9 +785,9 @@ void EmitX64::EmitFPVectorFromUnsignedFixed32(EmitContext& ctx, IR::Inst* inst) 
         if (code.HasHostFeature(HostFeature::AVX512_Ortho)) {
             code.vcvtudq2ps(xmm, xmm);
         } else {
-            const Xbyak::Address mem_4B000000 = code.MConst(xword, 0x4B0000004B000000, 0x4B0000004B000000);
-            const Xbyak::Address mem_53000000 = code.MConst(xword, 0x5300000053000000, 0x5300000053000000);
-            const Xbyak::Address mem_D3000080 = code.MConst(xword, 0xD3000080D3000080, 0xD3000080D3000080);
+            const Xbyak::Address mem_4B000000 = code.BConst<32>(xword, 0x4B000000);
+            const Xbyak::Address mem_53000000 = code.BConst<32>(xword, 0x53000000);
+            const Xbyak::Address mem_D3000080 = code.BConst<32>(xword, 0xD3000080);
 
             const Xbyak::Xmm tmp = ctx.reg_alloc.ScratchXmm();
 
@@ -800,7 +798,7 @@ void EmitX64::EmitFPVectorFromUnsignedFixed32(EmitContext& ctx, IR::Inst* inst) 
                 code.vaddps(xmm, xmm, mem_D3000080);
                 code.vaddps(xmm, tmp, xmm);
             } else {
-                const Xbyak::Address mem_0xFFFF = code.MConst(xword, 0x0000FFFF0000FFFF, 0x0000FFFF0000FFFF);
+                const Xbyak::Address mem_0xFFFF = code.BConst<32>(xword, 0x0000FFFF);
 
                 code.movdqa(tmp, mem_0xFFFF);
 
@@ -818,7 +816,7 @@ void EmitX64::EmitFPVectorFromUnsignedFixed32(EmitContext& ctx, IR::Inst* inst) 
         }
 
         if (ctx.FPCR(fpcr_controlled).RMode() == FP::RoundingMode::TowardsMinusInfinity) {
-            code.pand(xmm, code.MConst(xword, 0x7FFFFFFF7FFFFFFF, 0x7FFFFFFF7FFFFFFF));
+            code.pand(xmm, code.BConst<32>(xword, 0x7FFFFFFF));
         }
     });
 
@@ -837,8 +835,8 @@ void EmitX64::EmitFPVectorFromUnsignedFixed64(EmitContext& ctx, IR::Inst* inst) 
         if (code.HasHostFeature(HostFeature::AVX512_OrthoFloat)) {
             code.vcvtuqq2pd(xmm, xmm);
         } else {
-            const Xbyak::Address unpack = code.MConst(xword, 0x4530000043300000, 0);
-            const Xbyak::Address subtrahend = code.MConst(xword, 0x4330000000000000, 0x4530000000000000);
+            const Xbyak::Address unpack = code.Const(xword, 0x4530000043300000, 0);
+            const Xbyak::Address subtrahend = code.Const(xword, 0x4330000000000000, 0x4530000000000000);
 
             const Xbyak::Xmm unpack_reg = ctx.reg_alloc.ScratchXmm();
             const Xbyak::Xmm subtrahend_reg = ctx.reg_alloc.ScratchXmm();
@@ -885,7 +883,7 @@ void EmitX64::EmitFPVectorFromUnsignedFixed64(EmitContext& ctx, IR::Inst* inst) 
         }
 
         if (ctx.FPCR(fpcr_controlled).RMode() == FP::RoundingMode::TowardsMinusInfinity) {
-            code.pand(xmm, code.MConst(xword, 0x7FFFFFFFFFFFFFFF, 0x7FFFFFFFFFFFFFFF));
+            code.pand(xmm, code.BConst<64>(xword, 0x7FFFFFFFFFFFFFFF));
         }
     });
 
@@ -1285,6 +1283,31 @@ void EmitX64::EmitFPVectorMul64(EmitContext& ctx, IR::Inst* inst) {
     EmitThreeOpVectorOperation<64, DefaultIndexer>(code, ctx, inst, &Xbyak::CodeGenerator::mulpd);
 }
 
+template<typename FPT, bool needs_rounding_correction, bool needs_nan_correction>
+static void EmitFPVectorMulAddFallback(VectorArray<FPT>& result, const VectorArray<FPT>& addend, const VectorArray<FPT>& op1, const VectorArray<FPT>& op2, FP::FPCR fpcr, [[maybe_unused]] FP::FPSR& fpsr) {
+    for (size_t i = 0; i < result.size(); i++) {
+        if constexpr (needs_rounding_correction) {
+            constexpr FPT non_sign_mask = FP::FPInfo<FPT>::exponent_mask | FP::FPInfo<FPT>::mantissa_mask;
+            constexpr FPT smallest_normal_number = FP::FPValue<FPT, false, FP::FPInfo<FPT>::exponent_min, 1>();
+            if ((result[i] & non_sign_mask) == smallest_normal_number) {
+                result[i] = FP::FPMulAdd<FPT>(addend[i], op1[i], op2[i], fpcr, fpsr);
+                continue;
+            }
+        }
+        if constexpr (needs_nan_correction) {
+            if (FP::IsNaN(result[i])) {
+                if (FP::IsQNaN(addend[i]) && ((FP::IsZero(op1[i], fpcr) && FP::IsInf(op2[i])) || (FP::IsInf(op1[i]) && FP::IsZero(op2[i], fpcr)))) {
+                    result[i] = FP::FPInfo<FPT>::DefaultNaN();
+                } else if (auto r = FP::ProcessNaNs(addend[i], op1[i], op2[i])) {
+                    result[i] = *r;
+                } else {
+                    result[i] = FP::FPInfo<FPT>::DefaultNaN();
+                }
+            }
+        }
+    }
+}
+
 template<size_t fsize>
 void EmitFPVectorMulAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst) {
     using FPT = mcl::unsigned_integer_of_size<fsize>;
@@ -1296,9 +1319,12 @@ void EmitFPVectorMulAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst) {
     };
 
     if constexpr (fsize != 16) {
-        if (code.HasHostFeature(HostFeature::FMA | HostFeature::AVX) && ctx.HasOptimization(OptimizationFlag::Unsafe_InaccurateNaN)) {
+        const bool fpcr_controlled = inst->GetArg(3).GetU1();
+        const bool needs_rounding_correction = ctx.FPCR(fpcr_controlled).FZ();
+        const bool needs_nan_correction = !(ctx.FPCR(fpcr_controlled).DN() || ctx.HasOptimization(OptimizationFlag::Unsafe_InaccurateNaN));
+
+        if (code.HasHostFeature(HostFeature::FMA) && !needs_rounding_correction && !needs_nan_correction) {
             auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-            const bool fpcr_controlled = args[3].GetImmediateU1();
 
             const Xbyak::Xmm result = ctx.reg_alloc.UseScratchXmm(args[0]);
             const Xbyak::Xmm xmm_b = ctx.reg_alloc.UseXmm(args[1]);
@@ -1306,6 +1332,7 @@ void EmitFPVectorMulAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst) {
 
             MaybeStandardFPSCRValue(code, ctx, fpcr_controlled, [&] {
                 FCODE(vfmadd231p)(result, xmm_b, xmm_c);
+                ForceToDefaultNaN<fsize>(code, ctx.FPCR(fpcr_controlled), result);
             });
 
             ctx.reg_alloc.DefineValue(inst, result);
@@ -1314,12 +1341,11 @@ void EmitFPVectorMulAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst) {
 
         if (code.HasHostFeature(HostFeature::FMA | HostFeature::AVX)) {
             auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-            const bool fpcr_controlled = args[3].GetImmediateU1();
 
-            const Xbyak::Xmm result = ctx.reg_alloc.ScratchXmm();
             const Xbyak::Xmm xmm_a = ctx.reg_alloc.UseXmm(args[0]);
             const Xbyak::Xmm xmm_b = ctx.reg_alloc.UseXmm(args[1]);
             const Xbyak::Xmm xmm_c = ctx.reg_alloc.UseXmm(args[2]);
+            const Xbyak::Xmm result = ctx.reg_alloc.ScratchXmm();
             const Xbyak::Xmm tmp = ctx.reg_alloc.ScratchXmm();
 
             SharedLabel end = GenSharedLabel(), fallback = GenSharedLabel();
@@ -1328,19 +1354,32 @@ void EmitFPVectorMulAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst) {
                 code.movaps(result, xmm_a);
                 FCODE(vfmadd231p)(result, xmm_b, xmm_c);
 
-                code.movaps(tmp, GetNegativeZeroVector<fsize>(code));
-                code.andnps(tmp, result);
-                FCODE(vcmpeq_uqp)(tmp, tmp, GetSmallestNormalVector<fsize>(code));
+                if (needs_rounding_correction && needs_nan_correction) {
+                    code.vandps(tmp, result, GetNonSignMaskVector<fsize>(code));
+                    FCODE(vcmpeq_uqp)(tmp, tmp, GetSmallestNormalVector<fsize>(code));
+                } else if (needs_rounding_correction) {
+                    code.vandps(tmp, result, GetNonSignMaskVector<fsize>(code));
+                    ICODE(vpcmpeq)(tmp, tmp, GetSmallestNormalVector<fsize>(code));
+                } else if (needs_nan_correction) {
+                    FCODE(vcmpunordp)(tmp, result, result);
+                }
                 code.vptest(tmp, tmp);
                 code.jnz(*fallback, code.T_NEAR);
                 code.L(*end);
+                ForceToDefaultNaN<fsize>(code, ctx.FPCR(fpcr_controlled), result);
             });
 
             ctx.deferred_emits.emplace_back([=, &code, &ctx] {
                 code.L(*fallback);
                 code.sub(rsp, 8);
                 ABI_PushCallerSaveRegistersAndAdjustStackExcept(code, HostLocXmmIdx(result.getIdx()));
-                EmitFourOpFallbackWithoutRegAlloc(code, ctx, result, xmm_a, xmm_b, xmm_c, fallback_fn, fpcr_controlled);
+                if (needs_rounding_correction && needs_nan_correction) {
+                    EmitFourOpFallbackWithoutRegAlloc<LoadPreviousResult::Yes>(code, ctx, result, xmm_a, xmm_b, xmm_c, EmitFPVectorMulAddFallback<FPT, true, true>, fpcr_controlled);
+                } else if (needs_rounding_correction) {
+                    EmitFourOpFallbackWithoutRegAlloc<LoadPreviousResult::Yes>(code, ctx, result, xmm_a, xmm_b, xmm_c, EmitFPVectorMulAddFallback<FPT, true, false>, fpcr_controlled);
+                } else if (needs_nan_correction) {
+                    EmitFourOpFallbackWithoutRegAlloc<LoadPreviousResult::Yes>(code, ctx, result, xmm_a, xmm_b, xmm_c, EmitFPVectorMulAddFallback<FPT, false, true>, fpcr_controlled);
+                }
                 ABI_PopCallerSaveRegistersAndAdjustStackExcept(code, HostLocXmmIdx(result.getIdx()));
                 code.add(rsp, 8);
                 code.jmp(*end, code.T_NEAR);
@@ -1450,12 +1489,11 @@ template<size_t fsize>
 void FPVectorNeg(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst) {
     using FPT = mcl::unsigned_integer_of_size<fsize>;
     constexpr FPT sign_mask = FP::FPInfo<FPT>::sign_mask;
-    constexpr u64 sign_mask64 = mcl::bit::replicate_element<fsize, u64>(sign_mask);
 
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
 
     const Xbyak::Xmm a = ctx.reg_alloc.UseScratchXmm(args[0]);
-    const Xbyak::Address mask = code.MConst(xword, sign_mask64, sign_mask64);
+    const Xbyak::Address mask = code.BConst<fsize>(xword, sign_mask);
 
     code.xorps(a, mask);
 
@@ -1737,6 +1775,50 @@ static void EmitRSqrtEstimate(BlockOfCode& code, EmitContext& ctx, IR::Inst* ins
                     code.cvtps2pd(result, result);
                 }
             }
+
+            ctx.reg_alloc.DefineValue(inst, result);
+            return;
+        }
+
+        if (code.HasHostFeature(HostFeature::AVX)) {
+            auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+            const bool fpcr_controlled = args[1].GetImmediateU1();
+
+            const Xbyak::Xmm operand = ctx.reg_alloc.UseXmm(args[0]);
+            const Xbyak::Xmm result = ctx.reg_alloc.ScratchXmm();
+            const Xbyak::Xmm value = ctx.reg_alloc.ScratchXmm();
+
+            SharedLabel bad_values = GenSharedLabel(), end = GenSharedLabel();
+
+            code.movaps(value, operand);
+
+            code.movaps(xmm0, GetVectorOf<fsize, (fsize == 32 ? 0xFFFF8000 : 0xFFFF'F000'0000'0000)>(code));
+            code.pand(value, xmm0);
+            code.por(value, GetVectorOf<fsize, (fsize == 32 ? 0x00008000 : 0x0000'1000'0000'0000)>(code));
+
+            // Detect NaNs, negatives, zeros, denormals and infinities
+            FCODE(vcmpnge_uqp)(result, value, GetVectorOf<fsize, (FPT(1) << FP::FPInfo<FPT>::explicit_mantissa_width)>(code));
+            code.vptest(result, result);
+            code.jnz(*bad_values, code.T_NEAR);
+
+            FCODE(sqrtp)(value, value);
+            code.vmovaps(result, GetVectorOf<fsize, FP::FPValue<FPT, false, 0, 1>()>(code));
+            FCODE(divp)(result, value);
+
+            ICODE(padd)(result, GetVectorOf<fsize, (fsize == 32 ? 0x00004000 : 0x0000'0800'0000'0000)>(code));
+            code.pand(result, xmm0);
+
+            code.L(*end);
+
+            ctx.deferred_emits.emplace_back([=, &code, &ctx] {
+                code.L(*bad_values);
+                code.sub(rsp, 8);
+                ABI_PushCallerSaveRegistersAndAdjustStackExcept(code, HostLocXmmIdx(result.getIdx()));
+                EmitTwoOpFallbackWithoutRegAlloc(code, ctx, result, operand, fallback_fn, fpcr_controlled);
+                ABI_PopCallerSaveRegistersAndAdjustStackExcept(code, HostLocXmmIdx(result.getIdx()));
+                code.add(rsp, 8);
+                code.jmp(*end, code.T_NEAR);
+            });
 
             ctx.reg_alloc.DefineValue(inst, result);
             return;

@@ -110,6 +110,8 @@ public:
     explicit RegAlloc(BlockOfCode& code, std::vector<HostLoc> gpr_order, std::vector<HostLoc> xmm_order);
 
     ArgumentInfo GetArgumentInfo(IR::Inst* inst);
+    void RegisterPseudoOperation(IR::Inst* inst);
+    bool IsValueLive(IR::Inst* inst) const;
 
     Xbyak::Reg64 UseGpr(Argument& arg);
     Xbyak::Xmm UseXmm(Argument& arg);

@@ -7,14 +7,18 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 
 #include <mcl/assert.hpp>
 #include <mcl/bit/bit_field.hpp>
+#include <mcl/bit_cast.hpp>
 #include <mcl/mp/metavalue/lift_value.hpp>
 #include <mcl/stdint.hpp>
 
 #include "dynarmic/backend/arm64/abi.h"
+#include "dynarmic/backend/arm64/emit_context.h"
 #include "dynarmic/backend/arm64/fpsr_manager.h"
+#include "dynarmic/backend/arm64/verbose_debugging_output.h"
 #include "dynarmic/common/always_false.h"
 
 namespace Dynarmic::Backend::Arm64 {
@@ -93,7 +97,7 @@ void HostLocInfo::SetupScratchLocation() {
 void HostLocInfo::SetupLocation(const IR::Inst* value) {
     ASSERT(IsCompletelyEmpty());
     values.clear();
-    values.emplace_back(value);
+    values.push_back(value);
     realized = true;
     uses_this_inst = 0;
     accumulated_uses = 0;
@@ -136,8 +140,8 @@ RegAlloc::ArgumentInfo RegAlloc::GetArgumentInfo(IR::Inst* inst) {
     return ret;
 }
 
-bool RegAlloc::IsValueLive(IR::Inst* inst) const {
-    return !!ValueLocation(inst);
+bool RegAlloc::WasValueDefined(IR::Inst* inst) const {
+    return defined_insts.count(inst) > 0;
 }
 
 void RegAlloc::PrepareForCall(std::optional<Argument::copyable_reference> arg0, std::optional<Argument::copyable_reference> arg1, std::optional<Argument::copyable_reference> arg2, std::optional<Argument::copyable_reference> arg3) {
@@ -185,6 +189,8 @@ void RegAlloc::PrepareForCall(std::optional<Argument::copyable_reference> arg0, 
 }
 
 void RegAlloc::DefineAsExisting(IR::Inst* inst, Argument& arg) {
+    defined_insts.insert(inst);
+
     ASSERT(!ValueLocation(inst));
 
     if (arg.value.IsImmediate()) {
@@ -193,15 +199,17 @@ void RegAlloc::DefineAsExisting(IR::Inst* inst, Argument& arg) {
     }
 
     auto& info = ValueInfo(arg.value.GetInst());
-    info.values.emplace_back(inst);
+    info.values.push_back(inst);
     info.expected_uses += inst->UseCount();
 }
 
 void RegAlloc::DefineAsRegister(IR::Inst* inst, oaknut::Reg reg) {
+    defined_insts.insert(inst);
+
     ASSERT(!ValueLocation(inst));
     auto& info = reg.is_vector() ? fprs[reg.index()] : gprs[reg.index()];
     ASSERT(info.IsCompletelyEmpty());
-    info.values.emplace_back(inst);
+    info.values.push_back(inst);
     info.expected_uses += inst->UseCount();
 }
 
@@ -232,6 +240,33 @@ void RegAlloc::AssertNoMoreUses() const {
     ASSERT(std::all_of(fprs.begin(), fprs.end(), is_empty));
     ASSERT(is_empty(flags));
     ASSERT(std::all_of(spills.begin(), spills.end(), is_empty));
+}
+
+void RegAlloc::EmitVerboseDebuggingOutput() {
+    code.MOV(X19, mcl::bit_cast<u64>(&PrintVerboseDebuggingOutputLine));  // Non-volatile register
+
+    const auto do_location = [&](HostLocInfo& info, HostLocType type, size_t index) {
+        using namespace oaknut::util;
+        for (const IR::Inst* value : info.values) {
+            code.MOV(X0, SP);
+            code.MOV(X1, static_cast<u64>(type));
+            code.MOV(X2, index);
+            code.MOV(X3, value->GetName());
+            code.MOV(X4, static_cast<u64>(value->GetType()));
+            code.BLR(X19);
+        }
+    };
+
+    for (size_t i = 0; i < gprs.size(); i++) {
+        do_location(gprs[i], HostLocType::X, i);
+    }
+    for (size_t i = 0; i < fprs.size(); i++) {
+        do_location(fprs[i], HostLocType::Q, i);
+    }
+    do_location(flags, HostLocType::Nzcv, 0);
+    for (size_t i = 0; i < spills.size(); i++) {
+        do_location(spills[i], HostLocType::Spill, i);
+    }
 }
 
 template<HostLoc::Kind kind>
@@ -338,6 +373,8 @@ int RegAlloc::RealizeReadImpl(const IR::Value& value) {
 
 template<HostLoc::Kind kind>
 int RegAlloc::RealizeWriteImpl(const IR::Inst* value) {
+    defined_insts.insert(value);
+
     ASSERT(!ValueLocation(value));
 
     if constexpr (kind == HostLoc::Kind::Gpr) {
@@ -361,6 +398,8 @@ int RegAlloc::RealizeWriteImpl(const IR::Inst* value) {
 
 template<HostLoc::Kind kind>
 int RegAlloc::RealizeReadWriteImpl(const IR::Value& read_value, const IR::Inst* write_value) {
+    defined_insts.insert(write_value);
+
     // TODO: Move elimination
 
     const int write_loc = RealizeWriteImpl<kind>(write_value);
@@ -423,6 +462,8 @@ void RegAlloc::SpillFpr(int index) {
 }
 
 void RegAlloc::ReadWriteFlags(Argument& read, IR::Inst* write) {
+    defined_insts.insert(write);
+
     const auto current_location = ValueLocation(read.value.GetInst());
     ASSERT(current_location);
 

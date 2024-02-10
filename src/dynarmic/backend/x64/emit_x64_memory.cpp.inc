@@ -19,7 +19,7 @@ std::optional<AxxEmitX64::DoNotFastmemMarker> AxxEmitX64::ShouldFastmem(AxxEmitC
         return std::nullopt;
     }
 
-    const auto marker = std::make_tuple(ctx.Location(), ctx.GetInstOffset(inst));
+    const auto marker = std::make_tuple(ctx.Location(), inst->GetName());
     if (do_not_fastmem.count(marker) > 0) {
         return std::nullopt;
     }
@@ -44,7 +44,7 @@ FakeCall AxxEmitX64::FastmemCallback(u64 rip_) {
 
     if (iter->second.recompile) {
         const auto marker = iter->second.marker;
-        do_not_fastmem.emplace(marker);
+        do_not_fastmem.insert(marker);
         InvalidateBasicBlocks({std::get<0>(marker)});
     }
 

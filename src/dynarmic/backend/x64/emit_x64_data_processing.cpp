@@ -71,7 +71,6 @@ void EmitX64::EmitMostSignificantWord(EmitContext& ctx, IR::Inst* inst) {
         const Xbyak::Reg64 carry = ctx.reg_alloc.ScratchGpr();
         code.setc(carry.cvt8());
         ctx.reg_alloc.DefineValue(carry_inst, carry);
-        ctx.EraseInstruction(carry_inst);
     }
 
     ctx.reg_alloc.DefineValue(inst, result);
@@ -332,7 +331,6 @@ void EmitX64::EmitLogicalShiftLeft32(EmitContext& ctx, IR::Inst* inst) {
             }
 
             ctx.reg_alloc.DefineValue(carry_inst, carry);
-            ctx.EraseInstruction(carry_inst);
             ctx.reg_alloc.DefineValue(inst, result);
         } else {
             ctx.reg_alloc.UseScratch(shift_arg, HostLoc::RCX);
@@ -350,7 +348,6 @@ void EmitX64::EmitLogicalShiftLeft32(EmitContext& ctx, IR::Inst* inst) {
             code.shr(result.cvt64(), 32);
 
             ctx.reg_alloc.DefineValue(carry_inst, carry);
-            ctx.EraseInstruction(carry_inst);
             ctx.reg_alloc.DefineValue(inst, result);
         }
     }
@@ -469,7 +466,6 @@ void EmitX64::EmitLogicalShiftRight32(EmitContext& ctx, IR::Inst* inst) {
             }
 
             ctx.reg_alloc.DefineValue(carry_inst, carry);
-            ctx.EraseInstruction(carry_inst);
             ctx.reg_alloc.DefineValue(inst, result);
         } else {
             ctx.reg_alloc.UseScratch(shift_arg, HostLoc::RCX);
@@ -486,7 +482,6 @@ void EmitX64::EmitLogicalShiftRight32(EmitContext& ctx, IR::Inst* inst) {
             code.setc(carry.cvt8());
 
             ctx.reg_alloc.DefineValue(carry_inst, carry);
-            ctx.EraseInstruction(carry_inst);
             ctx.reg_alloc.DefineValue(inst, result);
         }
     }
@@ -603,7 +598,6 @@ void EmitX64::EmitArithmeticShiftRight32(EmitContext& ctx, IR::Inst* inst) {
             }
 
             ctx.reg_alloc.DefineValue(carry_inst, carry);
-            ctx.EraseInstruction(carry_inst);
             ctx.reg_alloc.DefineValue(inst, result);
         } else {
             ctx.reg_alloc.UseScratch(shift_arg, HostLoc::RCX);
@@ -620,7 +614,6 @@ void EmitX64::EmitArithmeticShiftRight32(EmitContext& ctx, IR::Inst* inst) {
             code.setc(carry.cvt8());
 
             ctx.reg_alloc.DefineValue(carry_inst, carry);
-            ctx.EraseInstruction(carry_inst);
             ctx.reg_alloc.DefineValue(inst, result);
         }
     }
@@ -718,7 +711,6 @@ void EmitX64::EmitRotateRight32(EmitContext& ctx, IR::Inst* inst) {
             }
 
             ctx.reg_alloc.DefineValue(carry_inst, carry);
-            ctx.EraseInstruction(carry_inst);
             ctx.reg_alloc.DefineValue(inst, result);
         } else {
             ctx.reg_alloc.UseScratch(shift_arg, HostLoc::RCX);
@@ -737,7 +729,6 @@ void EmitX64::EmitRotateRight32(EmitContext& ctx, IR::Inst* inst) {
             code.L(end);
 
             ctx.reg_alloc.DefineValue(carry_inst, carry);
-            ctx.EraseInstruction(carry_inst);
             ctx.reg_alloc.DefineValue(inst, result);
         }
     }
@@ -788,7 +779,6 @@ void EmitX64::EmitRotateRightExtended(EmitContext& ctx, IR::Inst* inst) {
         code.setc(carry);
 
         ctx.reg_alloc.DefineValue(carry_inst, carry);
-        ctx.EraseInstruction(carry_inst);
     }
 
     ctx.reg_alloc.DefineValue(inst, result);
@@ -934,12 +924,31 @@ static void EmitAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, int bit
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
     auto& carry_in = args[2];
 
+    // Consider using LEA.
+    if (!carry_inst && !overflow_inst && !nzcv_inst && carry_in.IsImmediate() && !carry_in.GetImmediateU1()) {
+        if (args[1].IsImmediate() && args[1].FitsInImmediateS32()) {
+            const Xbyak::Reg op1 = ctx.reg_alloc.UseGpr(args[0]).changeBit(bitsize);
+            const Xbyak::Reg result = ctx.reg_alloc.ScratchGpr().changeBit(bitsize);
+
+            code.lea(result, code.ptr[op1 + args[1].GetImmediateS32()]);
+
+            ctx.reg_alloc.DefineValue(inst, result);
+        } else {
+            const Xbyak::Reg op1 = ctx.reg_alloc.UseGpr(args[0]).changeBit(bitsize);
+            const Xbyak::Reg op2 = ctx.reg_alloc.UseGpr(args[1]).changeBit(bitsize);
+            const Xbyak::Reg result = ctx.reg_alloc.ScratchGpr().changeBit(bitsize);
+
+            code.lea(result, code.ptr[op1 + op2]);
+
+            ctx.reg_alloc.DefineValue(inst, result);
+        }
+        return;
+    }
+
     const Xbyak::Reg64 nzcv = DoNZCV(code, ctx.reg_alloc, nzcv_inst);
     const Xbyak::Reg result = ctx.reg_alloc.UseScratchGpr(args[0]).changeBit(bitsize);
     const Xbyak::Reg8 carry = DoCarry(ctx.reg_alloc, carry_in, carry_inst);
     const Xbyak::Reg8 overflow = overflow_inst ? ctx.reg_alloc.ScratchGpr().cvt8() : Xbyak::Reg8{-1};
-
-    // TODO: Consider using LEA.
 
     if (args[1].IsImmediate() && args[1].GetType() == IR::Type::U32) {
         const u32 op_arg = args[1].GetImmediateU32();
@@ -974,17 +983,14 @@ static void EmitAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, int bit
         code.lahf();
         code.seto(code.al);
         ctx.reg_alloc.DefineValue(nzcv_inst, nzcv);
-        ctx.EraseInstruction(nzcv_inst);
     }
     if (carry_inst) {
         code.setc(carry);
         ctx.reg_alloc.DefineValue(carry_inst, carry);
-        ctx.EraseInstruction(carry_inst);
     }
     if (overflow_inst) {
         code.seto(overflow);
         ctx.reg_alloc.DefineValue(overflow_inst, overflow);
-        ctx.EraseInstruction(overflow_inst);
     }
 
     ctx.reg_alloc.DefineValue(inst, result);
@@ -1007,12 +1013,22 @@ static void EmitSub(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, int bit
     auto& carry_in = args[2];
     const bool is_cmp = inst->UseCount() == size_t(!!carry_inst + !!overflow_inst + !!nzcv_inst) && carry_in.IsImmediate() && carry_in.GetImmediateU1();
 
+    // Consider using LEA.
+    if (!carry_inst && !overflow_inst && !nzcv_inst && carry_in.IsImmediate() && carry_in.GetImmediateU1() && args[1].IsImmediate() && args[1].FitsInImmediateS32() && args[1].GetImmediateS32() != 0xffff'ffff'8000'0000) {
+        const Xbyak::Reg op1 = ctx.reg_alloc.UseGpr(args[0]).changeBit(bitsize);
+        const Xbyak::Reg result = ctx.reg_alloc.ScratchGpr().changeBit(bitsize);
+
+        code.lea(result, code.ptr[op1 - args[1].GetImmediateS32()]);
+
+        ctx.reg_alloc.DefineValue(inst, result);
+        return;
+    }
+
     const Xbyak::Reg64 nzcv = DoNZCV(code, ctx.reg_alloc, nzcv_inst);
     const Xbyak::Reg result = (is_cmp ? ctx.reg_alloc.UseGpr(args[0]) : ctx.reg_alloc.UseScratchGpr(args[0])).changeBit(bitsize);
     const Xbyak::Reg8 carry = DoCarry(ctx.reg_alloc, carry_in, carry_inst);
     const Xbyak::Reg8 overflow = overflow_inst ? ctx.reg_alloc.ScratchGpr().cvt8() : Xbyak::Reg8{-1};
 
-    // TODO: Consider using LEA.
     // Note that x64 CF is inverse of what the ARM carry flag is here.
 
     bool invert_output_carry = true;
@@ -1064,7 +1080,6 @@ static void EmitSub(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, int bit
         code.lahf();
         code.seto(code.al);
         ctx.reg_alloc.DefineValue(nzcv_inst, nzcv);
-        ctx.EraseInstruction(nzcv_inst);
     }
     if (carry_inst) {
         if (invert_output_carry) {
@@ -1073,12 +1088,10 @@ static void EmitSub(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, int bit
             code.setc(carry);
         }
         ctx.reg_alloc.DefineValue(carry_inst, carry);
-        ctx.EraseInstruction(carry_inst);
     }
     if (overflow_inst) {
         code.seto(overflow);
         ctx.reg_alloc.DefineValue(overflow_inst, overflow);
-        ctx.EraseInstruction(overflow_inst);
     }
     if (!is_cmp) {
         ctx.reg_alloc.DefineValue(inst, result);

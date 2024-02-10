@@ -35,10 +35,6 @@ EmitContext::EmitContext(RegAlloc& reg_alloc, IR::Block& block)
 
 EmitContext::~EmitContext() = default;
 
-size_t EmitContext::GetInstOffset(IR::Inst* inst) const {
-    return static_cast<size_t>(std::distance(block.begin(), IR::Block::iterator(inst)));
-}
-
 void EmitContext::EraseInstruction(IR::Inst* inst) {
     block.Instructions().erase(inst);
     inst->ClearArgs();
@@ -92,7 +88,7 @@ void EmitX64::PushRSBHelper(Xbyak::Reg64 loc_desc_reg, Xbyak::Reg64 index_reg, I
 
     code.mov(loc_desc_reg, target.Value());
 
-    patch_information[target].mov_rcx.emplace_back(code.getCurr());
+    patch_information[target].mov_rcx.push_back(code.getCurr());
     EmitPatchMovRcx(target_code_ptr);
 
     code.mov(qword[r15 + index_reg * 8 + code.GetJitStateInfo().offsetof_rsb_location_descriptors], loc_desc_reg);
@@ -105,6 +101,7 @@ void EmitX64::PushRSBHelper(Xbyak::Reg64 loc_desc_reg, Xbyak::Reg64 index_reg, I
 
 void EmitX64::EmitVerboseDebuggingOutput(RegAlloc& reg_alloc) {
     code.sub(rsp, sizeof(RegisterData));
+    code.stmxcsr(dword[rsp + offsetof(RegisterData, mxcsr)]);
     for (int i = 0; i < 16; i++) {
         if (rsp.getIdx() == i) {
             continue;
@@ -128,6 +125,7 @@ void EmitX64::EmitVerboseDebuggingOutput(RegAlloc& reg_alloc) {
     for (int i = 0; i < 16; i++) {
         code.movaps(Xbyak::Xmm{i}, xword[rsp + offsetof(RegisterData, xmms) + 2 * sizeof(u64) * i]);
     }
+    code.ldmxcsr(dword[rsp + offsetof(RegisterData, mxcsr)]);
     code.add(rsp, sizeof(RegisterData));
 }
 
@@ -143,27 +141,32 @@ void EmitX64::EmitPushRSB(EmitContext& ctx, IR::Inst* inst) {
     PushRSBHelper(loc_desc_reg, index_reg, IR::LocationDescriptor{unique_hash_of_target});
 }
 
-void EmitX64::EmitGetCarryFromOp(EmitContext&, IR::Inst*) {
-    ASSERT_MSG(false, "should never happen");
+void EmitX64::EmitGetCarryFromOp(EmitContext& ctx, IR::Inst* inst) {
+    ctx.reg_alloc.RegisterPseudoOperation(inst);
 }
 
-void EmitX64::EmitGetOverflowFromOp(EmitContext&, IR::Inst*) {
-    ASSERT_MSG(false, "should never happen");
+void EmitX64::EmitGetOverflowFromOp(EmitContext& ctx, IR::Inst* inst) {
+    ctx.reg_alloc.RegisterPseudoOperation(inst);
 }
 
-void EmitX64::EmitGetGEFromOp(EmitContext&, IR::Inst*) {
-    ASSERT_MSG(false, "should never happen");
+void EmitX64::EmitGetGEFromOp(EmitContext& ctx, IR::Inst* inst) {
+    ctx.reg_alloc.RegisterPseudoOperation(inst);
 }
 
-void EmitX64::EmitGetUpperFromOp(EmitContext&, IR::Inst*) {
-    ASSERT_MSG(false, "should never happen");
+void EmitX64::EmitGetUpperFromOp(EmitContext& ctx, IR::Inst* inst) {
+    ctx.reg_alloc.RegisterPseudoOperation(inst);
 }
 
-void EmitX64::EmitGetLowerFromOp(EmitContext&, IR::Inst*) {
-    ASSERT_MSG(false, "should never happen");
+void EmitX64::EmitGetLowerFromOp(EmitContext& ctx, IR::Inst* inst) {
+    ctx.reg_alloc.RegisterPseudoOperation(inst);
 }
 
 void EmitX64::EmitGetNZFromOp(EmitContext& ctx, IR::Inst* inst) {
+    if (ctx.reg_alloc.IsValueLive(inst)) {
+        ctx.reg_alloc.RegisterPseudoOperation(inst);
+        return;
+    }
+
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
 
     const int bitsize = [&] {
@@ -190,6 +193,11 @@ void EmitX64::EmitGetNZFromOp(EmitContext& ctx, IR::Inst* inst) {
 }
 
 void EmitX64::EmitGetNZCVFromOp(EmitContext& ctx, IR::Inst* inst) {
+    if (ctx.reg_alloc.IsValueLive(inst)) {
+        ctx.reg_alloc.RegisterPseudoOperation(inst);
+        return;
+    }
+
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
 
     const int bitsize = [&] {
@@ -331,7 +339,7 @@ EmitX64::BlockDescriptor EmitX64::RegisterBlock(const IR::LocationDescriptor& de
     Patch(descriptor, entrypoint);
 
     BlockDescriptor block_desc{entrypoint, size};
-    block_descriptors.emplace(descriptor.Value(), block_desc);
+    block_descriptors.insert({IR::LocationDescriptor{descriptor.Value()}, block_desc});
     return block_desc;
 }
 
@@ -388,7 +396,9 @@ void EmitX64::ClearCache() {
 
 void EmitX64::InvalidateBasicBlocks(const tsl::robin_set<IR::LocationDescriptor>& locations) {
     code.EnableWriting();
-    SCOPE_EXIT { code.DisableWriting(); };
+    SCOPE_EXIT {
+        code.DisableWriting();
+    };
 
     for (const auto& descriptor : locations) {
         const auto it = block_descriptors.find(descriptor);

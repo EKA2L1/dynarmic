@@ -27,7 +27,7 @@ static void* EmitCallTrampoline(oaknut::CodeGenerator& code, T* this_) {
 
     oaknut::Label l_addr, l_this;
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     code.LDR(X0, l_this);
     code.LDR(Xscratch0, l_addr);
     code.BR(Xscratch0);
@@ -51,7 +51,7 @@ static void* EmitWrappedReadCallTrampoline(oaknut::CodeGenerator& code, T* this_
 
     constexpr u64 save_regs = ABI_CALLER_SAVE & ~ToRegList(Xscratch0);
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     ABI_PushRegisters(code, save_regs, 0);
     code.LDR(X0, l_this);
     code.MOV(X1, Xscratch0);
@@ -82,7 +82,7 @@ static void* EmitExclusiveReadCallTrampoline(oaknut::CodeGenerator& code, const 
         });
     };
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     code.LDR(X0, l_this);
     code.LDR(Xscratch0, l_addr);
     code.BR(Xscratch0);
@@ -106,7 +106,7 @@ static void* EmitWrappedWriteCallTrampoline(oaknut::CodeGenerator& code, T* this
 
     constexpr u64 save_regs = ABI_CALLER_SAVE;
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     ABI_PushRegisters(code, save_regs, 0);
     code.LDR(X0, l_this);
     code.MOV(X1, Xscratch0);
@@ -140,7 +140,7 @@ static void* EmitExclusiveWriteCallTrampoline(oaknut::CodeGenerator& code, const
                  : 1;
     };
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     code.LDR(X0, l_this);
     code.LDR(Xscratch0, l_addr);
     code.BR(Xscratch0);
@@ -161,7 +161,7 @@ static void* EmitRead128CallTrampoline(oaknut::CodeGenerator& code, A64::UserCal
 
     oaknut::Label l_addr, l_this;
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     ABI_PushRegisters(code, (1ull << 29) | (1ull << 30), 0);
     code.LDR(X0, l_this);
     code.LDR(Xscratch0, l_addr);
@@ -189,7 +189,7 @@ static void* EmitWrappedRead128CallTrampoline(oaknut::CodeGenerator& code, A64::
 
     constexpr u64 save_regs = ABI_CALLER_SAVE & ~ToRegList(Q0);
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     ABI_PushRegisters(code, save_regs, 0);
     code.LDR(X0, l_this);
     code.MOV(X1, Xscratch0);
@@ -220,7 +220,7 @@ static void* EmitExclusiveRead128CallTrampoline(oaknut::CodeGenerator& code, con
         });
     };
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     ABI_PushRegisters(code, (1ull << 29) | (1ull << 30), 0);
     code.LDR(X0, l_this);
     code.LDR(Xscratch0, l_addr);
@@ -246,7 +246,7 @@ static void* EmitWrite128CallTrampoline(oaknut::CodeGenerator& code, A64::UserCa
 
     oaknut::Label l_addr, l_this;
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     code.LDR(X0, l_this);
     code.FMOV(X2, D0);
     code.FMOV(X3, V0.D()[1]);
@@ -271,7 +271,7 @@ static void* EmitWrappedWrite128CallTrampoline(oaknut::CodeGenerator& code, A64:
 
     constexpr u64 save_regs = ABI_CALLER_SAVE;
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     ABI_PushRegisters(code, save_regs, 0);
     code.LDR(X0, l_this);
     code.MOV(X1, Xscratch0);
@@ -305,7 +305,7 @@ static void* EmitExclusiveWrite128CallTrampoline(oaknut::CodeGenerator& code, co
                  : 1;
     };
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     code.LDR(X0, l_this);
     code.FMOV(X2, D0);
     code.FMOV(X3, V0.D()[1]);
@@ -333,6 +333,7 @@ IR::Block A64AddressSpace::GenerateIR(IR::LocationDescriptor descriptor) const {
                                         {conf.define_unpredictable_behaviour, conf.wall_clock_cntpct});
 
     Optimization::A64CallbackConfigPass(ir_block, conf);
+    Optimization::NamingPass(ir_block);
     if (conf.HasOptimization(OptimizationFlag::GetSetElimination) && !conf.check_halt_on_memory_access) {
         Optimization::A64GetSetElimination(ir_block);
         Optimization::DeadCodeElimination(ir_block);
@@ -349,10 +350,14 @@ IR::Block A64AddressSpace::GenerateIR(IR::LocationDescriptor descriptor) const {
     return ir_block;
 }
 
+void A64AddressSpace::InvalidateCacheRanges(const boost::icl::interval_set<u64>& ranges) {
+    InvalidateBasicBlocks(block_ranges.InvalidateRanges(ranges));
+}
+
 void A64AddressSpace::EmitPrelude() {
     using namespace oaknut::util;
 
-    mem.unprotect();
+    UnprotectCodeMemory();
 
     prelude_info.read_memory_8 = EmitCallTrampoline<&A64::UserCallbacks::MemoryRead8>(code, conf.callbacks);
     prelude_info.read_memory_16 = EmitCallTrampoline<&A64::UserCallbacks::MemoryRead16>(code, conf.callbacks);
@@ -393,9 +398,9 @@ void A64AddressSpace::EmitPrelude() {
     prelude_info.add_ticks = EmitCallTrampoline<&A64::UserCallbacks::AddTicks>(code, conf.callbacks);
     prelude_info.get_ticks_remaining = EmitCallTrampoline<&A64::UserCallbacks::GetTicksRemaining>(code, conf.callbacks);
 
-    oaknut::Label return_from_run_code;
+    oaknut::Label return_from_run_code, l_return_to_dispatcher;
 
-    prelude_info.run_code = code.ptr<PreludeInfo::RunCodeFuncType>();
+    prelude_info.run_code = code.xptr<PreludeInfo::RunCodeFuncType>();
     {
         ABI_PushRegisters(code, ABI_CALLEE_SAVE | (1 << 30), sizeof(StackLayout));
 
@@ -407,6 +412,13 @@ void A64AddressSpace::EmitPrelude() {
         }
         if (conf.fastmem_pointer) {
             code.MOV(Xfastmem, mcl::bit_cast<u64>(conf.fastmem_pointer));
+        }
+
+        if (conf.HasOptimization(OptimizationFlag::ReturnStackBuffer)) {
+            code.LDR(Xscratch0, l_return_to_dispatcher);
+            for (size_t i = 0; i < RSBCount; i++) {
+                code.STR(Xscratch0, SP, offsetof(StackLayout, rsb) + offsetof(RSBEntry, code_ptr) + i * sizeof(RSBEntry));
+            }
         }
 
         if (conf.enable_cycle_counting) {
@@ -426,7 +438,7 @@ void A64AddressSpace::EmitPrelude() {
         code.BR(X19);
     }
 
-    prelude_info.step_code = code.ptr<PreludeInfo::RunCodeFuncType>();
+    prelude_info.step_code = code.xptr<PreludeInfo::RunCodeFuncType>();
     {
         ABI_PushRegisters(code, ABI_CALLEE_SAVE | (1 << 30), sizeof(StackLayout));
 
@@ -438,6 +450,13 @@ void A64AddressSpace::EmitPrelude() {
         }
         if (conf.fastmem_pointer) {
             code.MOV(Xfastmem, mcl::bit_cast<u64>(conf.fastmem_pointer));
+        }
+
+        if (conf.HasOptimization(OptimizationFlag::ReturnStackBuffer)) {
+            code.LDR(Xscratch0, l_return_to_dispatcher);
+            for (size_t i = 0; i < RSBCount; i++) {
+                code.STR(Xscratch0, SP, offsetof(StackLayout, rsb) + offsetof(RSBEntry, code_ptr) + i * sizeof(RSBEntry));
+            }
         }
 
         if (conf.enable_cycle_counting) {
@@ -461,7 +480,7 @@ void A64AddressSpace::EmitPrelude() {
         code.BR(X19);
     }
 
-    prelude_info.return_to_dispatcher = code.ptr<void*>();
+    prelude_info.return_to_dispatcher = code.xptr<void*>();
     {
         oaknut::Label l_this, l_addr;
 
@@ -490,7 +509,7 @@ void A64AddressSpace::EmitPrelude() {
         code.dx(mcl::bit_cast<u64>(Common::FptrCast(fn)));
     }
 
-    prelude_info.return_from_run_code = code.ptr<void*>();
+    prelude_info.return_from_run_code = code.xptr<void*>();
     {
         code.l(return_from_run_code);
 
@@ -513,10 +532,14 @@ void A64AddressSpace::EmitPrelude() {
         code.RET();
     }
 
-    prelude_info.end_of_prelude = code.ptr<u32*>();
+    code.align(8);
+    code.l(l_return_to_dispatcher);
+    code.dx(mcl::bit_cast<u64>(prelude_info.return_to_dispatcher));
+
+    prelude_info.end_of_prelude = code.offset();
 
     mem.invalidate_all();
-    mem.protect();
+    ProtectCodeMemory();
 }
 
 EmitConfig A64AddressSpace::GetEmitConfig() {
@@ -565,7 +588,16 @@ EmitConfig A64AddressSpace::GetEmitConfig() {
         .state_exclusive_state_offset = offsetof(A64JitState, exclusive_state),
 
         .coprocessors{},
+
+        .very_verbose_debugging_output = conf.very_verbose_debugging_output,
     };
+}
+
+void A64AddressSpace::RegisterNewBasicBlock(const IR::Block& block, const EmittedBlockInfo&) {
+    const A64::LocationDescriptor descriptor{block.Location()};
+    const A64::LocationDescriptor end_location{block.EndLocation()};
+    const auto range = boost::icl::discrete_interval<u64>::closed(descriptor.PC(), end_location.PC() - 1);
+    block_ranges.AddRange(range, descriptor);
 }
 
 }  // namespace Dynarmic::Backend::Arm64

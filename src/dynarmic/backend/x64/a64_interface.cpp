@@ -72,7 +72,9 @@ public:
         PerformRequestedCacheInvalidation();
 
         is_executing = true;
-        SCOPE_EXIT { this->is_executing = false; };
+        SCOPE_EXIT {
+            this->is_executing = false;
+        };
 
         // TODO: Check code alignment
 
@@ -99,7 +101,9 @@ public:
         PerformRequestedCacheInvalidation();
 
         is_executing = true;
-        SCOPE_EXIT { this->is_executing = false; };
+        SCOPE_EXIT {
+            this->is_executing = false;
+        };
 
         const HaltReason hr = block_of_code.StepCode(&jit_state, GetCurrentSingleStep());
 
@@ -266,6 +270,7 @@ private:
             invalidate_entire_cache = true;
             PerformRequestedCacheInvalidation();
         }
+        block_of_code.EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
 
         // JIT Compile
         const auto get_code = [this](u64 vaddr) { return conf.callbacks->MemoryReadCode(vaddr); };
@@ -273,6 +278,7 @@ private:
                                             {conf.define_unpredictable_behaviour, conf.wall_clock_cntpct});
         Optimization::PolyfillPass(ir_block, polyfill_options);
         Optimization::A64CallbackConfigPass(ir_block, conf);
+        Optimization::NamingPass(ir_block);
         if (conf.HasOptimization(OptimizationFlag::GetSetElimination) && !conf.check_halt_on_memory_access) {
             Optimization::A64GetSetElimination(ir_block);
             Optimization::DeadCodeElimination(ir_block);

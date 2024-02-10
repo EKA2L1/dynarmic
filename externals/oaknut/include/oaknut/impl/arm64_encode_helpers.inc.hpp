@@ -8,7 +8,7 @@ static constexpr std::uint32_t pdep(std::uint32_t val)
     std::uint32_t res = 0;
     for (std::uint32_t bb = 1; mask; bb += bb) {
         if (val & bb)
-            res |= mask & -mask;
+            res |= mask & (~mask + 1);
         mask &= mask - 1;
     }
     return res;
@@ -55,7 +55,7 @@ std::uint32_t encode(MovImm16 v)
     if constexpr (std::popcount(splat) == 17) {
         constexpr std::uint32_t mask = (1 << std::popcount(splat)) - 1;
         if ((v.m_encoded & mask) != v.m_encoded)
-            throw "invalid MovImm16";
+            throw OaknutException{ExceptionType::InvalidMovImm16};
     }
     return pdep<splat>(v.m_encoded);
 }
@@ -107,6 +107,61 @@ std::uint32_t encode(List<T, N> v)
     return encode<splat>(v.m_base);
 }
 
+template<std::uint32_t splat, std::size_t size, std::size_t align>
+std::uint32_t encode(AddrOffset<size, align> v)
+{
+    static_assert(std::popcount(splat) == size - align);
+
+    const auto encode_fn = [](std::ptrdiff_t current_offset, std::ptrdiff_t target_offset) {
+        const std::ptrdiff_t diff = target_offset - current_offset;
+        return pdep<splat>(AddrOffset<size, align>::encode(diff));
+    };
+
+    return std::visit(detail::overloaded{
+                          [&](std::uint32_t encoding) -> std::uint32_t {
+                              return pdep<splat>(encoding);
+                          },
+                          [&](Label* label) -> std::uint32_t {
+                              if (label->m_offset) {
+                                  return encode_fn(Policy::offset(), *label->m_offset);
+                              }
+
+                              label->m_wbs.emplace_back(Label::Writeback{Policy::offset(), ~splat, static_cast<Label::EmitFunctionType>(encode_fn)});
+                              return 0u;
+                          },
+                          [&](const void* p) -> std::uint32_t {
+                              const std::ptrdiff_t diff = reinterpret_cast<std::uintptr_t>(p) - Policy::template xptr<std::uintptr_t>();
+                              return pdep<splat>(AddrOffset<size, align>::encode(diff));
+                          },
+                      },
+                      v.m_payload);
+}
+
+template<std::uint32_t splat, std::size_t size, std::size_t shift_amount>
+std::uint32_t encode(PageOffset<size, shift_amount> v)
+{
+    static_assert(std::popcount(splat) == size);
+
+    const auto encode_fn = [](std::ptrdiff_t current_offset, std::ptrdiff_t target_offset) {
+        return pdep<splat>(PageOffset<size, shift_amount>::encode(static_cast<std::uintptr_t>(current_offset), static_cast<std::uintptr_t>(target_offset)));
+    };
+
+    return std::visit(detail::overloaded{
+                          [&](Label* label) -> std::uint32_t {
+                              if (label->m_offset) {
+                                  return encode_fn(Policy::offset(), *label->m_offset);
+                              }
+
+                              label->m_wbs.emplace_back(Label::Writeback{Policy::offset(), ~splat, static_cast<Label::EmitFunctionType>(encode_fn)});
+                              return 0u;
+                          },
+                          [&](const void* p) -> std::uint32_t {
+                              return pdep<splat>(PageOffset<size, shift_amount>::encode(Policy::template xptr<std::uintptr_t>(), reinterpret_cast<std::ptrdiff_t>(p)));
+                          },
+                      },
+                      v.m_payload);
+}
+
 #undef OAKNUT_STD_ENCODE
 
 void addsubext_lsl_correction(AddSubExt& ext, XRegSp)
@@ -136,7 +191,7 @@ void addsubext_verify_reg_size(AddSubExt ext, RReg rm)
         return;
     if (rm.bitsize() == 64 && (static_cast<int>(ext) & 0b011) == 0b011)
         return;
-    throw "invalid AddSubExt choice for rm size";
+    throw OaknutException{ExceptionType::InvalidAddSubExt};
 }
 
 void indexext_verify_reg_size(IndexExt ext, RReg rm)
@@ -145,11 +200,11 @@ void indexext_verify_reg_size(IndexExt ext, RReg rm)
         return;
     if (rm.bitsize() == 64 && (static_cast<int>(ext) & 1) == 1)
         return;
-    throw "invalid IndexExt choice for rm size";
+    throw OaknutException{ExceptionType::InvalidIndexExt};
 }
 
 void tbz_verify_reg_size(RReg rt, Imm<6> imm)
 {
     if (rt.bitsize() == 32 && imm.value() >= 32)
-        throw "invalid imm choice for rt size";
+        throw OaknutException{ExceptionType::BitPositionOutOfRange};
 }

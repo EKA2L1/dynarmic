@@ -25,12 +25,13 @@ struct alignas(16) RegisterData {
     std::array<u64, 16> gprs;
     std::array<Vector, 16> xmms;
     decltype(StackLayout::spill)* spill;
+    u32 mxcsr;
 };
 
 #ifdef _MSC_VER
 #    pragma warning(pop)
 #endif
 
-void PrintVerboseDebuggingOutputLine(RegisterData& reg_data, HostLoc hostloc, u64 inst_addr);
+void PrintVerboseDebuggingOutputLine(RegisterData& reg_data, HostLoc hostloc, size_t inst_index, size_t bitsize);
 
 }  // namespace Dynarmic::Backend::X64

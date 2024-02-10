@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <optional>
 
+#include "oaknut/oaknut_exception.hpp"
+
 namespace oaknut {
 
 template<std::size_t bit_size_>
@@ -22,7 +24,7 @@ public:
         : m_value(value_)
     {
         if (!is_valid(value_))
-            throw "outsized Imm value";
+            throw OaknutException{ExceptionType::ImmOutOfRange};
     }
 
     constexpr auto operator<=>(const Imm& other) const { return m_value <=> other.m_value; }
@@ -52,17 +54,17 @@ public:
         : m_encoded(value_ | ((shift_ == AddSubImmShift::SHL_12) ? 1 << 12 : 0))
     {
         if ((value_ & 0xFFF) != value_)
-            throw "invalid AddSubImm";
+            throw OaknutException{ExceptionType::InvalidAddSubImm};
     }
 
     constexpr /* implicit */ AddSubImm(std::uint64_t value_)
     {
         if ((value_ & 0xFFF) == value_) {
-            m_encoded = value_;
+            m_encoded = static_cast<std::uint32_t>(value_);
         } else if ((value_ & 0xFFF000) == value_) {
-            m_encoded = (value_ >> 12) | (1 << 12);
+            m_encoded = static_cast<std::uint32_t>((value_ >> 12) | (1 << 12));
         } else {
-            throw "invalid AddSubImm";
+            throw OaknutException{ExceptionType::InvalidAddSubImm};
         }
     }
 
@@ -99,7 +101,7 @@ public:
                 m_encoded = lsw | (shift << 16);
                 return;
             } else if (lsw != 0) {
-                throw "invalid MovImm16";
+                throw OaknutException{ExceptionType::InvalidMovImm16};
             }
             value_ >>= 16;
             shift++;
@@ -124,18 +126,18 @@ constexpr std::optional<std::uint32_t> encode_bit_imm(std::uint64_t value)
     if (value == 0 || (~value) == 0)
         return std::nullopt;
 
-    const std::size_t rotation = std::countr_zero(value & (value + 1));
+    const int rotation = std::countr_zero(value & (value + 1));
     const std::uint64_t rot_value = std::rotr(value, rotation);
 
-    const std::size_t esize = std::countr_zero(rot_value & (rot_value + 1));
-    const std::size_t ones = std::countr_one(rot_value);
+    const int esize = std::countr_zero(rot_value & (rot_value + 1));
+    const int ones = std::countr_one(rot_value);
 
     if (std::rotr(value, esize) != value)
         return std::nullopt;
 
-    const std::uint32_t S = ((-esize) << 1) | (ones - 1);
-    const std::uint32_t R = (esize - rotation) & (esize - 1);
-    const std::uint32_t N = (~S >> 6) & 1;
+    const int S = ((-esize) << 1) | (ones - 1);
+    const int R = (esize - rotation) & (esize - 1);
+    const int N = (~S >> 6) & 1;
 
     return static_cast<std::uint32_t>((S & 0b111111) | (R << 6) | (N << 12));
 }
@@ -161,7 +163,7 @@ public:
     {
         const auto encoded = detail::encode_bit_imm(value);
         if (!encoded || (*encoded & 0x1000) != 0)
-            throw "invalid BitImm32";
+            throw OaknutException{ExceptionType::InvalidBitImm32};
         m_encoded = *encoded;
     }
 
@@ -181,7 +183,7 @@ public:
     {
         const auto encoded = detail::encode_bit_imm(value);
         if (!encoded)
-            throw "invalid BitImm64";
+            throw OaknutException{ExceptionType::InvalidBitImm64};
         m_encoded = *encoded;
     }
 
@@ -224,7 +226,7 @@ struct ImmConst {
     constexpr /* implicit */ ImmConst(int value)
     {
         if (value != A) {
-            throw "invalid ImmConst";
+            throw OaknutException{ExceptionType::InvalidImmConst};
         }
     }
 };
@@ -233,7 +235,7 @@ struct ImmConstFZero {
     constexpr /* implicit */ ImmConstFZero(double value)
     {
         if (value != 0) {
-            throw "invalid ImmConstFZero";
+            throw OaknutException{ExceptionType::InvalidImmConstFZero};
         }
     }
 };
@@ -250,7 +252,7 @@ struct ImmChoice<A, B> {
         } else if (value == B) {
             m_encoded = 1;
         } else {
-            throw "invalid ImmChoice";
+            throw OaknutException{ExceptionType::InvalidImmChoice};
         }
     }
 
@@ -273,7 +275,7 @@ struct ImmChoice<A, B, C, D> {
         } else if (value == D) {
             m_encoded = 3;
         } else {
-            throw "invalid ImmChoice";
+            throw OaknutException{ExceptionType::InvalidImmChoice};
         }
     }
 
@@ -289,7 +291,7 @@ struct ImmRange {
         : m_value(value_)
     {
         if (value_ < Start || value_ > End) {
-            throw "invalid ImmRange";
+            throw OaknutException{ExceptionType::InvalidImmRange};
         }
     }
 
@@ -305,7 +307,7 @@ struct LslShift {
         : m_encoded((((-amount) & (max_value - 1)) << 6) | (max_value - amount - 1))
     {
         if (amount >= max_value)
-            throw "LslShift out of range";
+            throw OaknutException{ExceptionType::LslShiftOutOfRange};
     }
 
 private:

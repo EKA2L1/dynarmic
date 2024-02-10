@@ -17,7 +17,7 @@
 
 namespace Dynarmic::Backend::Arm64 {
 
-using DoNotFastmemMarker = std::tuple<IR::LocationDescriptor, std::ptrdiff_t>;
+using DoNotFastmemMarker = std::tuple<IR::LocationDescriptor, unsigned>;
 
 struct DoNotFastmemMarkerHash {
     size_t operator()(const DoNotFastmemMarker& value) const {
@@ -45,7 +45,7 @@ public:
     }
 
     void MarkDoNotFastmem(DoNotFastmemMarker marker) {
-        do_not_fastmem.emplace(marker);
+        do_not_fastmem.insert(marker);
     }
 
 private:

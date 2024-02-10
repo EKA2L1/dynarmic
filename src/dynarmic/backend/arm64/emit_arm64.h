@@ -19,10 +19,7 @@
 #include "dynarmic/ir/location_descriptor.h"
 
 namespace oaknut {
-struct PointerCodeGeneratorPolicy;
-template<typename>
-class BasicCodeGenerator;
-using CodeGenerator = BasicCodeGenerator<PointerCodeGeneratorPolicy>;
+struct CodeGenerator;
 struct Label;
 }  // namespace oaknut
 
@@ -91,8 +88,14 @@ struct Relocation {
     LinkTarget target;
 };
 
+enum class BlockRelocationType {
+    Branch,
+    MoveToScratch1,
+};
+
 struct BlockRelocation {
     std::ptrdiff_t code_offset;
+    BlockRelocationType type;
 };
 
 struct EmittedBlockInfo {
@@ -159,6 +162,9 @@ struct EmitConfig {
 
     // A32 specific
     std::array<std::shared_ptr<A32::Coprocessor>, 16> coprocessors{};
+
+    // Debugging
+    bool very_verbose_debugging_output;
 };
 
 EmittedBlockInfo EmitArm64(oaknut::CodeGenerator& code, IR::Block block, const EmitConfig& emit_conf, FastmemManager& fastmem_manager);
@@ -166,7 +172,7 @@ EmittedBlockInfo EmitArm64(oaknut::CodeGenerator& code, IR::Block block, const E
 template<IR::Opcode op>
 void EmitIR(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst);
 void EmitRelocation(oaknut::CodeGenerator& code, EmitContext& ctx, LinkTarget link_target);
-void EmitBlockLinkRelocation(oaknut::CodeGenerator& code, EmitContext& ctx, const IR::LocationDescriptor& descriptor);
+void EmitBlockLinkRelocation(oaknut::CodeGenerator& code, EmitContext& ctx, const IR::LocationDescriptor& descriptor, BlockRelocationType type);
 oaknut::Label EmitA32Cond(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Cond cond);
 oaknut::Label EmitA64Cond(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Cond cond);
 void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx);

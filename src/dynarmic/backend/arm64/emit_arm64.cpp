@@ -11,6 +11,7 @@
 #include "dynarmic/backend/arm64/emit_context.h"
 #include "dynarmic/backend/arm64/fpsr_manager.h"
 #include "dynarmic/backend/arm64/reg_alloc.h"
+#include "dynarmic/backend/arm64/verbose_debugging_output.h"
 #include "dynarmic/ir/basic_block.h"
 #include "dynarmic/ir/microinstruction.h"
 #include "dynarmic/ir/opcodes.h"
@@ -44,33 +45,49 @@ void EmitIR<IR::Opcode::CallHostFunction>(oaknut::CodeGenerator& code, EmitConte
 }
 
 template<>
-void EmitIR<IR::Opcode::PushRSB>(oaknut::CodeGenerator&, EmitContext&, IR::Inst*) {
-    // TODO
+void EmitIR<IR::Opcode::PushRSB>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    if (!ctx.conf.HasOptimization(OptimizationFlag::ReturnStackBuffer)) {
+        return;
+    }
+
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    ASSERT(args[0].IsImmediate());
+    const IR::LocationDescriptor target{args[0].GetImmediateU64()};
+
+    code.LDR(Wscratch2, SP, offsetof(StackLayout, rsb_ptr));
+    code.ADD(Wscratch2, Wscratch2, sizeof(RSBEntry));
+    code.AND(Wscratch2, Wscratch2, RSBIndexMask);
+    code.STR(Wscratch2, SP, offsetof(StackLayout, rsb_ptr));
+    code.ADD(Xscratch2, SP, Xscratch2);
+
+    code.MOV(Xscratch0, target.Value());
+    EmitBlockLinkRelocation(code, ctx, target, BlockRelocationType::MoveToScratch1);
+    code.STP(Xscratch0, Xscratch1, Xscratch2, offsetof(StackLayout, rsb));
 }
 
 template<>
 void EmitIR<IR::Opcode::GetCarryFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.IsValueLive(inst));
+    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
 void EmitIR<IR::Opcode::GetOverflowFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.IsValueLive(inst));
+    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
 void EmitIR<IR::Opcode::GetGEFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.IsValueLive(inst));
+    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
 void EmitIR<IR::Opcode::GetNZCVFromOp>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
 
-    if (ctx.reg_alloc.IsValueLive(inst)) {
+    if (ctx.reg_alloc.WasValueDefined(inst)) {
         return;
     }
 
@@ -101,7 +118,7 @@ template<>
 void EmitIR<IR::Opcode::GetNZFromOp>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
 
-    if (ctx.reg_alloc.IsValueLive(inst)) {
+    if (ctx.reg_alloc.WasValueDefined(inst)) {
         return;
     }
 
@@ -131,13 +148,13 @@ void EmitIR<IR::Opcode::GetNZFromOp>(oaknut::CodeGenerator& code, EmitContext& c
 template<>
 void EmitIR<IR::Opcode::GetUpperFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.IsValueLive(inst));
+    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
 void EmitIR<IR::Opcode::GetLowerFromOp>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
     [[maybe_unused]] auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(ctx.reg_alloc.IsValueLive(inst));
+    ASSERT(ctx.reg_alloc.WasValueDefined(inst));
 }
 
 template<>
@@ -175,13 +192,17 @@ static void EmitAddCycles(oaknut::CodeGenerator& code, EmitContext& ctx, size_t 
 }
 
 EmittedBlockInfo EmitArm64(oaknut::CodeGenerator& code, IR::Block block, const EmitConfig& conf, FastmemManager& fastmem_manager) {
+    if (conf.very_verbose_debugging_output) {
+        std::puts(IR::DumpBlock(block).c_str());
+    }
+
     EmittedBlockInfo ebi;
 
     FpsrManager fpsr_manager{code, conf.state_fpsr_offset};
     RegAlloc reg_alloc{code, fpsr_manager, GPR_ORDER, FPR_ORDER};
     EmitContext ctx{block, reg_alloc, conf, ebi, fpsr_manager, fastmem_manager, {}};
 
-    ebi.entry_point = code.ptr<CodePtr>();
+    ebi.entry_point = code.xptr<CodePtr>();
 
     if (ctx.block.GetCondition() == IR::Cond::AL) {
         ASSERT(!ctx.block.HasConditionFailedLocation());
@@ -223,6 +244,10 @@ EmittedBlockInfo EmitArm64(oaknut::CodeGenerator& code, IR::Block block, const E
 
         reg_alloc.UpdateAllUses();
         reg_alloc.AssertAllUnlocked();
+
+        if (conf.very_verbose_debugging_output) {
+            EmitVerboseDebuggingOutput(code, ctx);
+        }
     }
 
     fpsr_manager.Spill();
@@ -238,18 +263,28 @@ EmittedBlockInfo EmitArm64(oaknut::CodeGenerator& code, IR::Block block, const E
     }
     code.BRK(0);
 
-    ebi.size = code.ptr<CodePtr>() - ebi.entry_point;
+    ebi.size = code.xptr<CodePtr>() - ebi.entry_point;
     return ebi;
 }
 
 void EmitRelocation(oaknut::CodeGenerator& code, EmitContext& ctx, LinkTarget link_target) {
-    ctx.ebi.relocations.emplace_back(Relocation{code.ptr<CodePtr>() - ctx.ebi.entry_point, link_target});
+    ctx.ebi.relocations.emplace_back(Relocation{code.xptr<CodePtr>() - ctx.ebi.entry_point, link_target});
     code.NOP();
 }
 
-void EmitBlockLinkRelocation(oaknut::CodeGenerator& code, EmitContext& ctx, const IR::LocationDescriptor& descriptor) {
-    ctx.ebi.block_relocations[descriptor].emplace_back(BlockRelocation{code.ptr<CodePtr>() - ctx.ebi.entry_point});
-    code.NOP();
+void EmitBlockLinkRelocation(oaknut::CodeGenerator& code, EmitContext& ctx, const IR::LocationDescriptor& descriptor, BlockRelocationType type) {
+    ctx.ebi.block_relocations[descriptor].emplace_back(BlockRelocation{code.xptr<CodePtr>() - ctx.ebi.entry_point, type});
+    switch (type) {
+    case BlockRelocationType::Branch:
+        code.NOP();
+        break;
+    case BlockRelocationType::MoveToScratch1:
+        code.BRK(0);
+        code.NOP();
+        break;
+    default:
+        UNREACHABLE();
+    }
 }
 
 }  // namespace Dynarmic::Backend::Arm64

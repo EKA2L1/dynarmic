@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <mutex>
+
 #include <oaknut/code_block.hpp>
 #include <oaknut/oaknut.hpp>
 
@@ -38,37 +40,46 @@ namespace {
 struct SpinLockImpl {
     SpinLockImpl();
 
+    void Initialize();
+
     oaknut::CodeBlock mem;
     oaknut::CodeGenerator code;
+
     void (*lock)(volatile int*);
     void (*unlock)(volatile int*);
 };
 
+std::once_flag flag;
 SpinLockImpl impl;
 
 SpinLockImpl::SpinLockImpl()
         : mem{4096}
-        , code{mem.ptr()} {
+        , code{mem.ptr(), mem.ptr()} {}
+
+void SpinLockImpl::Initialize() {
     mem.unprotect();
 
-    lock = code.ptr<void (*)(volatile int*)>();
+    lock = code.xptr<void (*)(volatile int*)>();
     EmitSpinLockLock(code, X0);
     code.RET();
 
-    unlock = code.ptr<void (*)(volatile int*)>();
+    unlock = code.xptr<void (*)(volatile int*)>();
     EmitSpinLockUnlock(code, X0);
     code.RET();
 
     mem.protect();
+    mem.invalidate_all();
 }
 
 }  // namespace
 
 void SpinLock::Lock() {
+    std::call_once(flag, &SpinLockImpl::Initialize, impl);
     impl.lock(&storage);
 }
 
 void SpinLock::Unlock() {
+    std::call_once(flag, &SpinLockImpl::Initialize, impl);
     impl.unlock(&storage);
 }
 

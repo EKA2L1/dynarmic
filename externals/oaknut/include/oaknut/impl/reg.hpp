@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "oaknut/oaknut_exception.hpp"
+
 namespace oaknut {
 
 struct Reg;
@@ -50,8 +52,8 @@ struct DElem;
 
 struct Reg {
     constexpr explicit Reg(bool is_vector_, unsigned bitsize_, int index_)
-        : m_index(index_)
-        , m_bitsize(bitsize_)
+        : m_index(static_cast<std::int8_t>(index_))
+        , m_bitsize(static_cast<std::uint8_t>(bitsize_))
         , m_is_vector(is_vector_)
     {
         assert(index_ >= -1 && index_ <= 31);
@@ -63,8 +65,8 @@ struct Reg {
     constexpr bool is_vector() const { return m_is_vector; }
 
 private:
-    int m_index : 8;
-    unsigned m_bitsize : 8;
+    std::int8_t m_index;
+    std::uint8_t m_bitsize;
     bool m_is_vector;
 };
 
@@ -117,14 +119,14 @@ struct WReg : public RReg {
 inline XReg RReg::toX() const
 {
     if (index() == -1)
-        throw "cannot convert SP/WSP to XReg";
+        throw OaknutException{ExceptionType::InvalidXSPConversion};
     return XReg{index()};
 }
 
 inline WReg RReg::toW() const
 {
     if (index() == -1)
-        throw "cannot convert SP/WSP to WReg";
+        throw OaknutException{ExceptionType::InvalidWSPConversion};
     return WReg{index()};
 }
 
@@ -146,7 +148,7 @@ struct XRegSp : public RReg {
         : RReg(64, xr.index())
     {
         if (xr.index() == 31)
-            throw "unexpected ZR passed into an XRegSp";
+            throw OaknutException{ExceptionType::InvalidXZRConversion};
     }
 
     template<typename Policy>
@@ -161,7 +163,7 @@ struct WRegWsp : public RReg {
         : RReg(32, wr.index())
     {
         if (wr.index() == 31)
-            throw "unexpected WZR passed into an WRegWsp";
+            throw OaknutException{ExceptionType::InvalidWZRConversion};
     }
 
     template<typename Policy>
@@ -188,7 +190,7 @@ struct VReg : public Reg {
 struct VRegArranged : public Reg {
 protected:
     constexpr explicit VRegArranged(unsigned bitsize_, int index_, unsigned esize_)
-        : Reg(true, bitsize_, index_), m_esize(esize_)
+        : Reg(true, bitsize_, index_), m_esize(static_cast<std::uint8_t>(esize_))
     {
         assert(esize_ != 0 && (esize_ & (esize_ - 1)) == 0 && "esize must be a power of two");
         assert(esize_ <= bitsize_);
@@ -198,7 +200,7 @@ protected:
     friend class BasicCodeGenerator;
 
 private:
-    int m_esize : 8;
+    std::uint8_t m_esize;
 };
 
 struct VReg_2H : public VRegArranged {
@@ -296,7 +298,7 @@ struct Elem {
         : m_esize(esize_), m_reg(reg_), m_elem_index(elem_index_)
     {
         if (elem_index_ >= 128 / esize_)
-            throw "invalid elem_index";
+            throw OaknutException{ExceptionType::InvalidElementIndex};
     }
 
     constexpr unsigned esize() const { return m_esize; }
@@ -338,7 +340,7 @@ struct DElem_1 : public DElem {
         : DElem(inner)
     {
         if (inner.elem_index() != 1)
-            throw "invalid DElem_1";
+            throw OaknutException{ExceptionType::InvalidDElem_1};
     }
 };
 

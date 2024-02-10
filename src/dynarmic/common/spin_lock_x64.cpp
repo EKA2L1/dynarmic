@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <mutex>
+
 #include <xbyak/xbyak.h>
 
 #include "dynarmic/backend/x64/abi.h"
@@ -34,16 +36,18 @@ void EmitSpinLockUnlock(Xbyak::CodeGenerator& code, Xbyak::Reg64 ptr, Xbyak::Reg
 namespace {
 
 struct SpinLockImpl {
-    SpinLockImpl();
+    void Initialize();
 
     Xbyak::CodeGenerator code;
+
     void (*lock)(volatile int*);
     void (*unlock)(volatile int*);
 };
 
+std::once_flag flag;
 SpinLockImpl impl;
 
-SpinLockImpl::SpinLockImpl() {
+void SpinLockImpl::Initialize() {
     const Xbyak::Reg64 ABI_PARAM1 = Backend::X64::HostLocToReg64(Backend::X64::ABI_PARAM1);
 
     code.align();
@@ -60,10 +64,12 @@ SpinLockImpl::SpinLockImpl() {
 }  // namespace
 
 void SpinLock::Lock() {
+    std::call_once(flag, &SpinLockImpl::Initialize, impl);
     impl.lock(&storage);
 }
 
 void SpinLock::Unlock() {
+    std::call_once(flag, &SpinLockImpl::Initialize, impl);
     impl.unlock(&storage);
 }
 

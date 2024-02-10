@@ -12,6 +12,7 @@
 #    define NOMINMAX
 #    include <windows.h>
 #elif defined(__APPLE__)
+#    include <TargetConditionals.h>
 #    include <libkern/OSCacheControl.h>
 #    include <pthread.h>
 #    include <sys/mman.h>
@@ -30,7 +31,15 @@ public:
 #if defined(_WIN32)
         m_memory = (std::uint32_t*)VirtualAlloc(nullptr, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 #elif defined(__APPLE__)
+#    if TARGET_OS_IPHONE
+        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
+#    else
         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
+#    endif
+#elif defined(__NetBSD__)
+        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_MPROTECT(PROT_READ | PROT_WRITE | PROT_EXEC), MAP_ANON | MAP_PRIVATE, -1, 0);
+#elif defined(__OpenBSD__)
+        m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
 #else
         m_memory = (std::uint32_t*)mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
 #endif
@@ -63,15 +72,19 @@ public:
 
     void protect()
     {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
         pthread_jit_write_protect_np(1);
+#elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
+        mprotect(m_memory, m_size, PROT_READ | PROT_EXEC);
 #endif
     }
 
     void unprotect()
     {
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
         pthread_jit_write_protect_np(0);
+#elif defined(__APPLE__) || defined(__NetBSD__) || defined(__OpenBSD__)
+        mprotect(m_memory, m_size, PROT_READ | PROT_WRITE);
 #endif
     }
 

@@ -28,7 +28,7 @@ static void* EmitCallTrampoline(oaknut::CodeGenerator& code, T* this_) {
 
     oaknut::Label l_addr, l_this;
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     code.LDR(X0, l_this);
     code.LDR(Xscratch0, l_addr);
     code.BR(Xscratch0);
@@ -52,7 +52,7 @@ static void* EmitWrappedReadCallTrampoline(oaknut::CodeGenerator& code, T* this_
 
     constexpr u64 save_regs = ABI_CALLER_SAVE & ~ToRegList(Xscratch0);
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     ABI_PushRegisters(code, save_regs, 0);
     code.LDR(X0, l_this);
     code.MOV(X1, Xscratch0);
@@ -83,7 +83,7 @@ static void* EmitExclusiveReadCallTrampoline(oaknut::CodeGenerator& code, const 
         });
     };
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     code.LDR(X0, l_this);
     code.LDR(Xscratch0, l_addr);
     code.BR(Xscratch0);
@@ -107,7 +107,7 @@ static void* EmitWrappedWriteCallTrampoline(oaknut::CodeGenerator& code, T* this
 
     constexpr u64 save_regs = ABI_CALLER_SAVE;
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     ABI_PushRegisters(code, save_regs, 0);
     code.LDR(X0, l_this);
     code.MOV(X1, Xscratch0);
@@ -141,7 +141,7 @@ static void* EmitExclusiveWriteCallTrampoline(oaknut::CodeGenerator& code, const
                  : 1;
     };
 
-    void* target = code.ptr<void*>();
+    void* target = code.xptr<void*>();
     code.LDR(X0, l_this);
     code.LDR(Xscratch0, l_addr);
     code.BR(Xscratch0);
@@ -165,6 +165,7 @@ IR::Block A32AddressSpace::GenerateIR(IR::LocationDescriptor descriptor) const {
     IR::Block ir_block = A32::Translate(A32::LocationDescriptor{descriptor}, conf.callbacks, {conf.arch_version, conf.define_unpredictable_behaviour, conf.hook_hint_instructions});
 
     Optimization::PolyfillPass(ir_block, {});
+    Optimization::NamingPass(ir_block);
     if (conf.HasOptimization(OptimizationFlag::GetSetElimination)) {
         Optimization::A32GetSetElimination(ir_block, {.convert_nzc_to_nz = true});
         Optimization::DeadCodeElimination(ir_block);
@@ -174,15 +175,20 @@ IR::Block A32AddressSpace::GenerateIR(IR::LocationDescriptor descriptor) const {
         Optimization::ConstantPropagation(ir_block);
         Optimization::DeadCodeElimination(ir_block);
     }
+    Optimization::IdentityRemovalPass(ir_block);
     Optimization::VerificationPass(ir_block);
 
     return ir_block;
 }
 
+void A32AddressSpace::InvalidateCacheRanges(const boost::icl::interval_set<u32>& ranges) {
+    InvalidateBasicBlocks(block_ranges.InvalidateRanges(ranges));
+}
+
 void A32AddressSpace::EmitPrelude() {
     using namespace oaknut::util;
 
-    mem.unprotect();
+    UnprotectCodeMemory();
 
     prelude_info.read_memory_8 = EmitCallTrampoline<&A32::UserCallbacks::MemoryRead8>(code, conf.callbacks);
     prelude_info.read_memory_16 = EmitCallTrampoline<&A32::UserCallbacks::MemoryRead16>(code, conf.callbacks);
@@ -214,9 +220,9 @@ void A32AddressSpace::EmitPrelude() {
     prelude_info.add_ticks = EmitCallTrampoline<&A32::UserCallbacks::AddTicks>(code, conf.callbacks);
     prelude_info.get_ticks_remaining = EmitCallTrampoline<&A32::UserCallbacks::GetTicksRemaining>(code, conf.callbacks);
 
-    oaknut::Label return_from_run_code;
+    oaknut::Label return_from_run_code, l_return_to_dispatcher;
 
-    prelude_info.run_code = code.ptr<PreludeInfo::RunCodeFuncType>();
+    prelude_info.run_code = code.xptr<PreludeInfo::RunCodeFuncType>();
     {
         ABI_PushRegisters(code, ABI_CALLEE_SAVE | (1 << 30), sizeof(StackLayout));
 
@@ -228,6 +234,13 @@ void A32AddressSpace::EmitPrelude() {
         }
         if (conf.fastmem_pointer) {
             code.MOV(Xfastmem, mcl::bit_cast<u64>(conf.fastmem_pointer));
+        }
+
+        if (conf.HasOptimization(OptimizationFlag::ReturnStackBuffer)) {
+            code.LDR(Xscratch0, l_return_to_dispatcher);
+            for (size_t i = 0; i < RSBCount; i++) {
+                code.STR(Xscratch0, SP, offsetof(StackLayout, rsb) + offsetof(RSBEntry, code_ptr) + i * sizeof(RSBEntry));
+            }
         }
 
         if (conf.enable_cycle_counting) {
@@ -248,7 +261,7 @@ void A32AddressSpace::EmitPrelude() {
         code.BR(X19);
     }
 
-    prelude_info.step_code = code.ptr<PreludeInfo::RunCodeFuncType>();
+    prelude_info.step_code = code.xptr<PreludeInfo::RunCodeFuncType>();
     {
         ABI_PushRegisters(code, ABI_CALLEE_SAVE | (1 << 30), sizeof(StackLayout));
 
@@ -260,6 +273,13 @@ void A32AddressSpace::EmitPrelude() {
         }
         if (conf.fastmem_pointer) {
             code.MOV(Xfastmem, mcl::bit_cast<u64>(conf.fastmem_pointer));
+        }
+
+        if (conf.HasOptimization(OptimizationFlag::ReturnStackBuffer)) {
+            code.LDR(Xscratch0, l_return_to_dispatcher);
+            for (size_t i = 0; i < RSBCount; i++) {
+                code.STR(Xscratch0, SP, offsetof(StackLayout, rsb) + offsetof(RSBEntry, code_ptr) + i * sizeof(RSBEntry));
+            }
         }
 
         if (conf.enable_cycle_counting) {
@@ -284,7 +304,7 @@ void A32AddressSpace::EmitPrelude() {
         code.BR(X19);
     }
 
-    prelude_info.return_to_dispatcher = code.ptr<void*>();
+    prelude_info.return_to_dispatcher = code.xptr<void*>();
     {
         oaknut::Label l_this, l_addr;
 
@@ -313,7 +333,7 @@ void A32AddressSpace::EmitPrelude() {
         code.dx(mcl::bit_cast<u64>(Common::FptrCast(fn)));
     }
 
-    prelude_info.return_from_run_code = code.ptr<void*>();
+    prelude_info.return_from_run_code = code.xptr<void*>();
     {
         code.l(return_from_run_code);
 
@@ -336,10 +356,14 @@ void A32AddressSpace::EmitPrelude() {
         code.RET();
     }
 
-    prelude_info.end_of_prelude = code.ptr<u32*>();
+    code.align(8);
+    code.l(l_return_to_dispatcher);
+    code.dx(mcl::bit_cast<u64>(prelude_info.return_to_dispatcher));
+
+    prelude_info.end_of_prelude = code.offset();
 
     mem.invalidate_all();
-    mem.protect();
+    ProtectCodeMemory();
 }
 
 EmitConfig A32AddressSpace::GetEmitConfig() {
@@ -388,7 +412,16 @@ EmitConfig A32AddressSpace::GetEmitConfig() {
         .state_exclusive_state_offset = offsetof(A32JitState, exclusive_state),
 
         .coprocessors = conf.coprocessors,
+
+        .very_verbose_debugging_output = conf.very_verbose_debugging_output,
     };
+}
+
+void A32AddressSpace::RegisterNewBasicBlock(const IR::Block& block, const EmittedBlockInfo&) {
+    const A32::LocationDescriptor descriptor{block.Location()};
+    const A32::LocationDescriptor end_location{block.EndLocation()};
+    const auto range = boost::icl::discrete_interval<u32>::closed(descriptor.PC(), end_location.PC() - 1);
+    block_ranges.AddRange(range, descriptor);
 }
 
 }  // namespace Dynarmic::Backend::Arm64

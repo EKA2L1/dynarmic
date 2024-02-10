@@ -162,7 +162,8 @@ void HostLocInfo::EmitVerboseDebuggingOutput(BlockOfCode& code, size_t host_loc_
     for (IR::Inst* value : values) {
         code.mov(code.ABI_PARAM1, rsp);
         code.mov(code.ABI_PARAM2, host_loc_index);
-        code.mov(code.ABI_PARAM3, mcl::bit_cast<u64>(value));
+        code.mov(code.ABI_PARAM3, value->GetName());
+        code.mov(code.ABI_PARAM4, GetBitWidth(value->GetType()));
         code.CallFunction(PrintVerboseDebuggingOutputLine);
     }
 }
@@ -269,6 +270,24 @@ RegAlloc::ArgumentInfo RegAlloc::GetArgumentInfo(IR::Inst* inst) {
         }
     }
     return ret;
+}
+
+void RegAlloc::RegisterPseudoOperation(IR::Inst* inst) {
+    ASSERT(IsValueLive(inst) || !inst->HasUses());
+
+    for (size_t i = 0; i < inst->NumArgs(); i++) {
+        const IR::Value arg = inst->GetArg(i);
+        if (!arg.IsImmediate() && !IsValuelessType(arg.GetType())) {
+            if (const auto loc = ValueLocation(arg.GetInst())) {
+                // May not necessarily have a value (e.g. CMP variant of Sub32).
+                LocInfo(*loc).AddArgReference();
+            }
+        }
+    }
+}
+
+bool RegAlloc::IsValueLive(IR::Inst* inst) const {
+    return !!ValueLocation(inst);
 }
 
 Xbyak::Reg64 RegAlloc::UseGpr(Argument& arg) {
@@ -570,7 +589,7 @@ HostLoc RegAlloc::LoadImmediate(IR::Value imm, HostLoc host_loc) {
         if (imm_value == 0) {
             MAYBE_AVX(xorps, reg, reg);
         } else {
-            MAYBE_AVX(movaps, reg, code.MConst(code.xword, imm_value));
+            MAYBE_AVX(movaps, reg, code.Const(code.xword, imm_value));
         }
         return host_loc;
     }

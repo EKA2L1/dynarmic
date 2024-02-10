@@ -10,6 +10,7 @@
 #include <memory>
 #include <type_traits>
 
+#include <mcl/bit/bit_field.hpp>
 #include <mcl/stdint.hpp>
 #include <xbyak/xbyak.h>
 #include <xbyak/xbyak_util.h>
@@ -51,6 +52,8 @@ public:
     void ClearCache();
     /// Calculates how much space is remaining to use.
     size_t SpaceRemaining() const;
+    /// Ensure at least codesize bytes of code cache memory are committed at the current code_ptr.
+    void EnsureMemoryCommitted(size_t codesize);
 
     /// Runs emulated code from code_ptr.
     HaltReason RunCode(void* jit_state, CodePtr code_ptr) const;
@@ -120,7 +123,13 @@ public:
         }
     }
 
-    Xbyak::Address MConst(const Xbyak::AddressFrame& frame, u64 lower, u64 upper = 0);
+    Xbyak::Address Const(const Xbyak::AddressFrame& frame, u64 lower, u64 upper = 0);
+
+    template<size_t esize>
+    Xbyak::Address BConst(const Xbyak::AddressFrame& frame, u64 value) {
+        return Const(frame, mcl::bit::replicate_element<u64>(esize, value),
+                     mcl::bit::replicate_element<u64>(esize, value));
+    }
 
     CodePtr GetCodeBegin() const;
     size_t GetTotalCodeSize() const;
@@ -175,6 +184,10 @@ private:
 
     bool prelude_complete = false;
     CodePtr code_begin = nullptr;
+
+#ifdef _WIN32
+    size_t committed_size = 0;
+#endif
 
     ConstantPool constant_pool;
 

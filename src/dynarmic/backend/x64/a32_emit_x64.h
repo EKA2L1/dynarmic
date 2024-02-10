@@ -12,8 +12,8 @@
 
 #include <tsl/robin_map.h>
 
+#include "dynarmic/backend/block_range_information.h"
 #include "dynarmic/backend/x64/a32_jitstate.h"
-#include "dynarmic/backend/x64/block_range_information.h"
 #include "dynarmic/backend/x64/emit_x64.h"
 #include "dynarmic/frontend/A32/a32_location_descriptor.h"
 #include "dynarmic/interface/A32/a32.h"
@@ -97,7 +97,7 @@ protected:
     std::string LocationDescriptorToFriendlyName(const IR::LocationDescriptor&) const override;
 
     // Fastmem information
-    using DoNotFastmemMarker = std::tuple<IR::LocationDescriptor, std::ptrdiff_t>;
+    using DoNotFastmemMarker = std::tuple<IR::LocationDescriptor, unsigned>;
     struct FastmemPatchInfo {
         u64 resume_rip;
         u64 callback;

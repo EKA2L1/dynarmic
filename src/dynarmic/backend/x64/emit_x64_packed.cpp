@@ -33,7 +33,6 @@ void EmitX64::EmitPackedAddU8(EmitContext& ctx, IR::Inst* inst) {
         code.pxor(xmm_ge, ones);
 
         ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-        ctx.EraseInstruction(ge_inst);
     }
 
     ctx.reg_alloc.DefineValue(inst, xmm_a);
@@ -56,7 +55,6 @@ void EmitX64::EmitPackedAddS8(EmitContext& ctx, IR::Inst* inst) {
         code.pcmpgtb(xmm_ge, xmm0);
 
         ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-        ctx.EraseInstruction(ge_inst);
     }
 
     code.paddb(xmm_a, xmm_b);
@@ -86,7 +84,6 @@ void EmitX64::EmitPackedAddU16(EmitContext& ctx, IR::Inst* inst) {
             code.pxor(xmm_ge, ones);
 
             ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-            ctx.EraseInstruction(ge_inst);
         } else {
             const Xbyak::Xmm tmp_a = ctx.reg_alloc.ScratchXmm();
             const Xbyak::Xmm tmp_b = ctx.reg_alloc.ScratchXmm();
@@ -94,12 +91,11 @@ void EmitX64::EmitPackedAddU16(EmitContext& ctx, IR::Inst* inst) {
             // !(b <= a+b) == b > a+b
             code.movdqa(tmp_a, xmm_a);
             code.movdqa(tmp_b, xmm_b);
-            code.paddw(tmp_a, code.MConst(xword, 0x80008000));
-            code.paddw(tmp_b, code.MConst(xword, 0x80008000));
+            code.paddw(tmp_a, code.Const(xword, 0x80008000));
+            code.paddw(tmp_b, code.Const(xword, 0x80008000));
             code.pcmpgtw(tmp_b, tmp_a);  // *Signed* comparison!
 
             ctx.reg_alloc.DefineValue(ge_inst, tmp_b);
-            ctx.EraseInstruction(ge_inst);
         }
     }
 
@@ -123,7 +119,6 @@ void EmitX64::EmitPackedAddS16(EmitContext& ctx, IR::Inst* inst) {
         code.pcmpgtw(xmm_ge, xmm0);
 
         ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-        ctx.EraseInstruction(ge_inst);
     }
 
     code.paddw(xmm_a, xmm_b);
@@ -146,7 +141,6 @@ void EmitX64::EmitPackedSubU8(EmitContext& ctx, IR::Inst* inst) {
         code.pcmpeqb(xmm_ge, xmm_a);
 
         ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-        ctx.EraseInstruction(ge_inst);
     }
 
     code.psubb(xmm_a, xmm_b);
@@ -171,7 +165,6 @@ void EmitX64::EmitPackedSubS8(EmitContext& ctx, IR::Inst* inst) {
         code.pcmpgtb(xmm_ge, xmm0);
 
         ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-        ctx.EraseInstruction(ge_inst);
     }
 
     code.psubb(xmm_a, xmm_b);
@@ -205,7 +198,6 @@ void EmitX64::EmitPackedSubU16(EmitContext& ctx, IR::Inst* inst) {
         code.psubw(xmm_a, xmm_b);
 
         ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-        ctx.EraseInstruction(ge_inst);
         ctx.reg_alloc.DefineValue(inst, xmm_a);
         return;
     }
@@ -217,8 +209,8 @@ void EmitX64::EmitPackedSubU16(EmitContext& ctx, IR::Inst* inst) {
 
     // (a >= b) == !(b > a)
     code.pcmpeqb(ones, ones);
-    code.paddw(xmm_a, code.MConst(xword, 0x80008000));
-    code.paddw(xmm_b, code.MConst(xword, 0x80008000));
+    code.paddw(xmm_a, code.Const(xword, 0x80008000));
+    code.paddw(xmm_b, code.Const(xword, 0x80008000));
     code.movdqa(xmm_ge, xmm_b);
     code.pcmpgtw(xmm_ge, xmm_a);  // *Signed* comparison!
     code.pxor(xmm_ge, ones);
@@ -226,7 +218,6 @@ void EmitX64::EmitPackedSubU16(EmitContext& ctx, IR::Inst* inst) {
     code.psubw(xmm_a, xmm_b);
 
     ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-    ctx.EraseInstruction(ge_inst);
     ctx.reg_alloc.DefineValue(inst, xmm_a);
 }
 
@@ -247,7 +238,6 @@ void EmitX64::EmitPackedSubS16(EmitContext& ctx, IR::Inst* inst) {
         code.pcmpgtw(xmm_ge, xmm0);
 
         ctx.reg_alloc.DefineValue(ge_inst, xmm_ge);
-        ctx.EraseInstruction(ge_inst);
     }
 
     code.psubw(xmm_a, xmm_b);
@@ -554,7 +544,6 @@ static void EmitPackedSubAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst
         code.or_(ge_sum, ge_diff);
 
         ctx.reg_alloc.DefineValue(ge_inst, ge_sum);
-        ctx.EraseInstruction(ge_inst);
     }
 
     if (is_halving) {
@@ -654,7 +643,7 @@ void EmitX64::EmitPackedAbsDiffSumU8(EmitContext& ctx, IR::Inst* inst) {
     const Xbyak::Xmm tmp = ctx.reg_alloc.ScratchXmm();
 
     // TODO: Optimize with zero-extension detection
-    code.movaps(tmp, code.MConst(xword, 0x0000'0000'ffff'ffff));
+    code.movaps(tmp, code.Const(xword, 0x0000'0000'ffff'ffff));
     code.pand(xmm_a, tmp);
     code.pand(xmm_b, tmp);
     code.psadbw(xmm_a, xmm_b);

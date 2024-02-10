@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -183,7 +184,15 @@ void MachHandler::RemoveCodeBlock(u64 rip) {
     code_block_infos.erase(iter);
 }
 
-MachHandler mach_handler;
+std::mutex handler_lock;
+std::optional<MachHandler> mach_handler;
+
+void RegisterHandler() {
+    std::lock_guard<std::mutex> guard(handler_lock);
+    if (!mach_handler) {
+        mach_handler.emplace();
+    }
+}
 
 }  // anonymous namespace
 
@@ -220,28 +229,34 @@ mig_external kern_return_t catch_mach_exception_raise_state(
         return KERN_FAILURE;
     }
 
-    dynarmic_thread_state_t* ts = reinterpret_cast<dynarmic_thread_state_t*>(new_state);
-    std::memcpy(ts, reinterpret_cast<const dynarmic_thread_state_t*>(old_state), sizeof(dynarmic_thread_state_t));
-    *new_stateCnt = THREAD_STATE_COUNT;
+    // The input/output pointers are not necessarily 8-byte aligned.
+    dynarmic_thread_state_t ts;
+    std::memcpy(&ts, old_state, sizeof(ts));
 
-    return mach_handler.HandleRequest(ts);
+    kern_return_t ret = mach_handler->HandleRequest(&ts);
+
+    std::memcpy(new_state, &ts, sizeof(ts));
+    *new_stateCnt = THREAD_STATE_COUNT;
+    return ret;
 }
 
 struct ExceptionHandler::Impl final {
     Impl(u64 code_begin_, u64 code_end_)
             : code_begin(code_begin_)
-            , code_end(code_end_) {}
+            , code_end(code_end_) {
+        RegisterHandler();
+    }
 
     void SetCallback(std::function<FakeCall(u64)> cb) {
         CodeBlockInfo cbi;
         cbi.code_begin = code_begin;
         cbi.code_end = code_end;
         cbi.cb = cb;
-        mach_handler.AddCodeBlock(cbi);
+        mach_handler->AddCodeBlock(cbi);
     }
 
     ~Impl() {
-        mach_handler.RemoveCodeBlock(code_begin);
+        mach_handler->RemoveCodeBlock(code_begin);
     }
 
 private:
