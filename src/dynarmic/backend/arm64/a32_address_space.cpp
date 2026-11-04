@@ -233,7 +233,7 @@ void A32AddressSpace::EmitPrelude() {
             code.MOV(Xpagetable, conf.tlb_entries ? mcl::bit_cast<u64>(conf.tlb_entries) : mcl::bit_cast<u64>(conf.page_table));
         }
         if (conf.fastmem_pointer) {
-            code.MOV(Xfastmem, mcl::bit_cast<u64>(conf.fastmem_pointer));
+            code.MOV(Xfastmem, *conf.fastmem_pointer);
         }
 
         if (conf.HasOptimization(OptimizationFlag::ReturnStackBuffer)) {
@@ -272,7 +272,7 @@ void A32AddressSpace::EmitPrelude() {
             code.MOV(Xpagetable, conf.tlb_entries ? mcl::bit_cast<u64>(conf.tlb_entries) : mcl::bit_cast<u64>(conf.page_table));
         }
         if (conf.fastmem_pointer) {
-            code.MOV(Xfastmem, mcl::bit_cast<u64>(conf.fastmem_pointer));
+            code.MOV(Xfastmem, *conf.fastmem_pointer);
         }
 
         if (conf.HasOptimization(OptimizationFlag::ReturnStackBuffer)) {
@@ -391,7 +391,7 @@ EmitConfig A32AddressSpace::GetEmitConfig() {
         .tlb_pointer = mcl::bit_cast<u64>(conf.tlb_entries),
         .tlb_index_mask = (1ULL << conf.tlb_index_mask_bits) - 1,
 
-        .fastmem_pointer = mcl::bit_cast<u64>(conf.fastmem_pointer),
+        .fastmem_pointer = conf.fastmem_pointer,
         .recompile_on_fastmem_failure = conf.recompile_on_fastmem_failure,
         .fastmem_address_space_bits = 32,
         .silently_mirror_fastmem = true,

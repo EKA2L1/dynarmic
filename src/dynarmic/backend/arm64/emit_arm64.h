@@ -136,7 +136,7 @@ struct EmitConfig {
     u64 tlb_index_mask;
 
     // Fastmem
-    u64 fastmem_pointer;
+    std::optional<u64> fastmem_pointer;
     bool recompile_on_fastmem_failure;
     size_t fastmem_address_space_bits;
     bool silently_mirror_fastmem;
