@@ -241,10 +241,10 @@ template<>
     code.imul(entryoff, tmp, sizeof(TLBEntry));
     code.add(entryoff, r14);
 
-    code.mov(tmp, dword[entryoff + check_offset]);
+    code.mov(tmp.cvt64(), qword[entryoff + check_offset]);
 
-    code.shr(tmp, static_cast<int>(page_bits));         /// Get the page index
-    code.cmp(tmp, tmp2);                                /// Compare the page index stored.
+    code.shr(tmp.cvt64(), static_cast<int>(page_bits));         /// Get the page index
+    code.cmp(tmp.cvt64(), tmp2.cvt64());                        /// Compare the page index stored.
 
     code.jne(abort, code.T_NEAR);
 

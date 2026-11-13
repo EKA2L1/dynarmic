@@ -5,8 +5,8 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
-#include <cstring>
 #include <vector>
 
 namespace Dynarmic {
@@ -33,10 +33,13 @@ constexpr MemoryPermission operator|=(MemoryPermission& result, MemoryPermission
     return result = (result | f);
 }
 
+// The JIT compares only page indices, so an unused tag must not share a page index with any guest address.
+constexpr VAddr TLB_INVALID_ADDR = ~VAddr{0};
+
 struct TLBEntry {
-    VAddr read_addr = 0;
-    VAddr write_addr = 0;
-    VAddr execute_addr = 0;
+    VAddr read_addr = TLB_INVALID_ADDR;
+    VAddr write_addr = TLB_INVALID_ADDR;
+    VAddr execute_addr = TLB_INVALID_ADDR;
 
     std::uint8_t *host_base = nullptr;
 };
@@ -73,19 +76,19 @@ public:
         if ((perm & MemoryPermission::Read) == MemoryPermission::Read) {
             entry.read_addr = addr_normed;
         } else {
-            entry.read_addr = 0;
+            entry.read_addr = TLB_INVALID_ADDR;
         }
 
         if ((perm & MemoryPermission::Write) == MemoryPermission::Write) {
             entry.write_addr = addr_normed;
         } else {
-            entry.write_addr = 0;
+            entry.write_addr = TLB_INVALID_ADDR;
         }
         
         if ((perm & MemoryPermission::Execute) == MemoryPermission::Execute) {
             entry.execute_addr = addr_normed;
         } else {
-            entry.execute_addr = 0;
+            entry.execute_addr = TLB_INVALID_ADDR;
         }
     }
 
@@ -98,7 +101,7 @@ public:
 
         if ((entry.read_addr == addr_normed) || (entry.write_addr == addr_normed) ||
             (entry.execute_addr == addr_normed)) {
-            std::memset(&entry, 0, sizeof(TLBEntry));
+            entry = TLBEntry{};
         }
     }
 
